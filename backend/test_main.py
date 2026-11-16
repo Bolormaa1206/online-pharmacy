@@ -64,12 +64,15 @@ class PharmacyWorkflowTests(unittest.TestCase):
                 main.Checkout(items=[
                     main.CartItem(pharmacy_id=self.pharmacy_a_id, medicine_id=self.medicine_a_id, quantity=2),
                     main.CartItem(pharmacy_id=self.pharmacy_b_id, medicine_id=self.medicine_a_id, quantity=1),
-                ]),
+                ], pickup=False, address='Test delivery address'),
                 customer,
                 session,
             )
             order_a = next(order for order in created if order['pharmacy_id'] == self.pharmacy_a_id)
             order_b = next(order for order in created if order['pharmacy_id'] == self.pharmacy_b_id)
+            self.assertEqual(main.DELIVERY_FEE, order_a['delivery_fee'])
+            self.assertEqual(main.DELIVERY_FEE, order_b['delivery_fee'])
+            self.assertEqual(2000 + main.DELIVERY_FEE, order_a['total'])
 
         with self.Session() as session:
             staff_a = session.get(main.User, self.staff_a_id)
@@ -150,17 +153,20 @@ class PharmacyWorkflowTests(unittest.TestCase):
                     patient_email='customer@test.mn',
                     valid_until='2099-01-01',
                     note='Test prescription',
-                    items=[main.PrescriptionMedicineInput(medicine_id=self.medicine_rx_id, dosage='Өдөрт 2 удаа', quantity=2, instructions='Хоолны дараа')],
+                    items=[main.PrescriptionMedicineInput(medicine_id=self.medicine_rx_id, units_per_dose=1, times_per_day=2, duration_days=3, instructions='Хоолны дараа')],
                 ),
                 doctor,
                 session,
             )
             self.assertEqual('active', prescription['items'][0]['status'])
+            self.assertEqual(6, prescription['items'][0]['required_units'])
+            self.assertEqual(1, prescription['items'][0]['required_packs'])
+            prescription_item_id = prescription['items'][0]['id']
 
         with self.Session() as session:
             customer = session.get(main.User, self.customer_id)
             order = main.checkout(
-                main.Checkout(items=[main.CartItem(pharmacy_id=self.pharmacy_a_id, medicine_id=self.medicine_rx_id, quantity=1)]),
+                main.Checkout(items=[main.CartItem(pharmacy_id=self.pharmacy_a_id, medicine_id=self.medicine_rx_id, quantity=1, prescription_item_id=prescription_item_id)]),
                 customer,
                 session,
             )[0]
@@ -170,6 +176,19 @@ class PharmacyWorkflowTests(unittest.TestCase):
         with self.Session() as session:
             staff = session.get(main.User, self.staff_a_id)
             main.decide(order['id'], 'approve', staff, session)
+
+        with self.Session() as session:
+            customer = session.get(main.User, self.customer_id)
+            mine = main.my_prescriptions(customer, session)
+            self.assertEqual('reserved', mine[0]['items'][0]['status'])
+            paid = main.pay_order(order['id'], customer, session)
+            self.assertEqual('paid', paid['status'])
+
+        with self.Session() as session:
+            staff = session.get(main.User, self.staff_a_id)
+            self.assertEqual('preparing', main.advance_order(order['id'], staff, session)['status'])
+            self.assertEqual('ready', main.advance_order(order['id'], staff, session)['status'])
+            self.assertEqual('completed', main.advance_order(order['id'], staff, session)['status'])
 
         with self.Session() as session:
             customer = session.get(main.User, self.customer_id)

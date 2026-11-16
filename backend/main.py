@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, timezone
+from math import ceil
 from pathlib import Path
 from typing import Optional
 import hashlib, hmac, os, re, secrets
@@ -53,6 +54,8 @@ class Medicine(Base):
     category: Mapped[str] = mapped_column(String(100))
     prescription_required: Mapped[bool] = mapped_column(Boolean, default=False)
     description: Mapped[str] = mapped_column(String(500), default='')
+    units_per_pack: Mapped[int] = mapped_column(Integer, default=10)
+    unit_label: Mapped[str] = mapped_column(String(30), default='шахмал')
 class Inventory(Base):
     __tablename__ = 'inventory'
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -71,6 +74,10 @@ class Order(Base):
     pickup: Mapped[bool] = mapped_column(Boolean, default=True)
     address: Mapped[str] = mapped_column(String(250), default='')
     prescription_note: Mapped[str] = mapped_column(String(1000), default='')
+    delivery_fee: Mapped[int] = mapped_column(Integer, default=0)
+    payment_status: Mapped[str] = mapped_column(String(30), default='unpaid')
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
@@ -100,6 +107,10 @@ class PrescriptionItem(Base):
     medicine_id: Mapped[int] = mapped_column(ForeignKey('medicines.id'))
     dosage: Mapped[str] = mapped_column(String(200))
     quantity: Mapped[int] = mapped_column(Integer)
+    required_units: Mapped[int] = mapped_column(Integer, default=1)
+    units_per_dose: Mapped[int] = mapped_column(Integer, default=1)
+    times_per_day: Mapped[int] = mapped_column(Integer, default=1)
+    duration_days: Mapped[int] = mapped_column(Integer, default=1)
     instructions: Mapped[str] = mapped_column(String(500), default='')
 class PrescriptionUsage(Base):
     __tablename__='prescription_usage'
@@ -160,6 +171,7 @@ class CartItem(BaseModel):
     pharmacy_id: int
     medicine_id: int
     quantity: int = Field(ge=1, le=100)
+    prescription_item_id: Optional[int] = None
 class Checkout(BaseModel):
     items: list[CartItem] = Field(min_length=1, max_length=50)
     pickup: bool = True
@@ -171,8 +183,10 @@ class StockEdit(BaseModel):
     expiry: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
 class PrescriptionMedicineInput(BaseModel):
     medicine_id: int
-    dosage: str = Field(min_length=2, max_length=200)
-    quantity: int = Field(ge=1, le=100)
+    dosage: str = Field(default='', max_length=200)
+    units_per_dose: int = Field(default=1, ge=1, le=20)
+    times_per_day: int = Field(default=1, ge=1, le=12)
+    duration_days: int = Field(default=1, ge=1, le=90)
     instructions: str = Field(default='', max_length=500)
 class PrescriptionCreate(BaseModel):
     patient_email: str = Field(min_length=5, max_length=200)
@@ -207,7 +221,18 @@ def admin(user: User = Depends(auth)):
     if user.role != 'admin': raise HTTPException(403, 'Зөвхөн админы эрхтэй')
     return user
 
-def medicine_view(m): return {'id':m.id,'name':m.name,'category':m.category,'prescription_required':m.prescription_required,'description':m.description}
+DELIVERY_FEE = 5000
+
+def medicine_view(m):
+    return {
+        'id':m.id,
+        'name':m.name,
+        'category':m.category,
+        'prescription_required':m.prescription_required,
+        'description':m.description,
+        'units_per_pack':m.units_per_pack,
+        'unit_label':m.unit_label,
+    }
 def inventory_view(inv, session):
     p = session.get(Pharmacy,inv.pharmacy_id)
     return {'id':inv.id,'pharmacy_id':p.id,'pharmacy_name':p.name,'address':p.address,'lat':p.lat,'lng':p.lng,'medicine_id':inv.medicine_id,'price':inv.price,'stock':inv.stock,'expiry':inv.expiry}
@@ -222,7 +247,21 @@ def prescription_view(prescription, session):
         medicine=session.get(Medicine,item.medicine_id)
         usage=session.scalar(select(PrescriptionUsage).where(PrescriptionUsage.prescription_item_id==item.id))
         status=usage.status if usage else ('expired' if prescription.valid_until<today else 'active')
-        item_views.append({'id':item.id,'medicine_id':item.medicine_id,'medicine_name':medicine.name,'dosage':item.dosage,'quantity':item.quantity,'instructions':item.instructions,'status':status})
+        item_views.append({
+            'id':item.id,
+            'medicine_id':item.medicine_id,
+            'medicine_name':medicine.name,
+            'dosage':item.dosage,
+            'required_units':item.required_units,
+            'required_packs':item.quantity,
+            'units_per_pack':medicine.units_per_pack,
+            'unit_label':medicine.unit_label,
+            'units_per_dose':item.units_per_dose,
+            'times_per_day':item.times_per_day,
+            'duration_days':item.duration_days,
+            'instructions':item.instructions,
+            'status':status,
+        })
     return {'id':prescription.id,'doctor_name':doctor_user.name,'patient_name':patient.name,'patient_email':patient.email,'note':prescription.note,'valid_until':prescription.valid_until,'created_at':prescription.created_at.isoformat(),'items':item_views}
 
 def order_view(order, session):
@@ -233,11 +272,53 @@ def order_view(order, session):
     for item in items:
         usage=session.scalar(select(PrescriptionUsage).where(PrescriptionUsage.order_item_id==item.id))
         prescription_id=None
+        prescription_item_id=None
+        required_units=None
+        prescription_dosage=None
+        prescription_instructions=None
+        prescription_valid_until=None
         if usage:
             prescription_item=session.get(PrescriptionItem,usage.prescription_item_id)
             prescription_id=prescription_item.prescription_id
-        item_views.append({'medicine_id':item.medicine_id,'name':session.get(Medicine,item.medicine_id).name,'quantity':item.quantity,'unit_price':item.unit_price,'prescription_id':prescription_id})
-    return {'id':order.id,'pharmacy_id':order.pharmacy_id,'pharmacy_name':p.name,'customer_name':customer.name,'status':order.status,'pickup':order.pickup,'address':order.address,'prescription_note':order.prescription_note,'created_at':order.created_at.isoformat(),'items':item_views, 'total':sum(i.quantity*i.unit_price for i in items)}
+            prescription_item_id=prescription_item.id
+            required_units=prescription_item.required_units
+            prescription_dosage=prescription_item.dosage
+            prescription_instructions=prescription_item.instructions
+            prescription_valid_until=session.get(Prescription,prescription_item.prescription_id).valid_until
+        medicine=session.get(Medicine,item.medicine_id)
+        item_views.append({
+            'medicine_id':item.medicine_id,
+            'name':medicine.name,
+            'quantity':item.quantity,
+            'unit_price':item.unit_price,
+            'unit_label':medicine.unit_label,
+            'units_per_pack':medicine.units_per_pack,
+            'required_units':required_units,
+            'prescription_id':prescription_id,
+            'prescription_item_id':prescription_item_id,
+            'prescription_dosage':prescription_dosage,
+            'prescription_instructions':prescription_instructions,
+            'prescription_valid_until':prescription_valid_until,
+        })
+    subtotal=sum(i.quantity*i.unit_price for i in items)
+    return {
+        'id':order.id,
+        'pharmacy_id':order.pharmacy_id,
+        'pharmacy_name':p.name,
+        'customer_name':customer.name,
+        'status':order.status,
+        'payment_status':order.payment_status,
+        'pickup':order.pickup,
+        'address':order.address,
+        'prescription_note':order.prescription_note,
+        'created_at':order.created_at.isoformat(),
+        'paid_at':order.paid_at.isoformat() if order.paid_at else None,
+        'completed_at':order.completed_at.isoformat() if order.completed_at else None,
+        'items':item_views,
+        'subtotal':subtotal,
+        'delivery_fee':order.delivery_fee,
+        'total':subtotal+order.delivery_fee,
+    }
 
 @app.get('/api/health')
 def health(): return {'ok': True}
@@ -281,13 +362,13 @@ def checkout(data:Checkout,user:User=Depends(auth),session:Session=Depends(db)):
     if not data.pickup and not data.address.strip():raise HTTPException(400,'Хүргэлтийн хаяг оруулна уу')
     grouped={}
     for item in data.items:
-        key=(item.pharmacy_id,item.medicine_id)
+        key=(item.pharmacy_id,item.medicine_id,item.prescription_item_id)
         grouped[key]=grouped.get(key,0)+item.quantity
     if any(v>100 for v in grouped.values()):raise HTTPException(400,'Нэг эмийн тоо хэтэрсэн')
     by_pharmacy={}
     selected_prescriptions=set()
     today=datetime.now().date().isoformat()
-    for (pharmacy_id,medicine_id),quantity in grouped.items():
+    for (pharmacy_id,medicine_id,requested_prescription_item_id),quantity in grouped.items():
         inv=session.scalar(select(Inventory).where(Inventory.pharmacy_id==pharmacy_id,Inventory.medicine_id==medicine_id))
         med=session.get(Medicine,medicine_id)
         if not inv or not med:raise HTTPException(404,'Эмийн нөөц олдсонгүй')
@@ -302,20 +383,31 @@ def checkout(data:Checkout,user:User=Depends(auth),session:Session=Depends(db)):
                     Prescription.patient_id==user.id,
                     Prescription.valid_until>=today,
                     PrescriptionItem.medicine_id==medicine_id,
-                    PrescriptionItem.quantity>=quantity,
+                    PrescriptionItem.quantity==quantity,
                     PrescriptionUsage.id.is_(None),
                 )
                 .order_by(Prescription.valid_until,PrescriptionItem.id)
             )
+            if requested_prescription_item_id:
+                statement=statement.where(PrescriptionItem.id==requested_prescription_item_id)
             if selected_prescriptions:
                 statement=statement.where(PrescriptionItem.id.not_in(selected_prescriptions))
             prescription_item=session.scalar(statement)
-            if not prescription_item:raise HTTPException(400,f'{med.name}: хүчинтэй цахим жор олдсонгүй')
+            if not prescription_item:raise HTTPException(400,f'{med.name}: хүчинтэй цахим жор эсвэл жорт бичсэн савлагааны тоо тохирохгүй байна')
             selected_prescriptions.add(prescription_item.id)
+        elif requested_prescription_item_id:
+            raise HTTPException(400,'Жорын холбоос зөвхөн жороор олгох эмд ашиглагдана')
         by_pharmacy.setdefault(pharmacy_id,[]).append((inv,quantity,prescription_item))
     results=[]
     for pharmacy_id,entries in by_pharmacy.items():
-        order=Order(user_id=user.id,pharmacy_id=pharmacy_id,pickup=data.pickup,address=data.address.strip(),prescription_note=data.prescription_note.strip())
+        order=Order(
+            user_id=user.id,
+            pharmacy_id=pharmacy_id,
+            pickup=data.pickup,
+            address=data.address.strip(),
+            prescription_note=data.prescription_note.strip(),
+            delivery_fee=0 if data.pickup else DELIVERY_FEE,
+        )
         session.add(order);session.flush()
         for inv,quantity,prescription_item in entries:
             order_item=OrderItem(order_id=order.id,medicine_id=inv.medicine_id,quantity=quantity,unit_price=inv.price)
@@ -333,6 +425,18 @@ def checkout(data:Checkout,user:User=Depends(auth),session:Session=Depends(db)):
 def my_orders(user:User=Depends(auth),session:Session=Depends(db)):
     if user.role!='customer':raise HTTPException(403,'Зөвхөн хэрэглэгчийн захиалга')
     return [order_view(o,session) for o in session.scalars(select(Order).where(Order.user_id==user.id).order_by(Order.id.desc())).all()]
+@app.patch('/api/orders/{order_id}/pay')
+def pay_order(order_id:int,user:User=Depends(auth),session:Session=Depends(db)):
+    if user.role!='customer':raise HTTPException(403,'Зөвхөн хэрэглэгч төлбөр төлнө')
+    order=session.scalar(select(Order).where(Order.id==order_id,Order.user_id==user.id))
+    if not order:raise HTTPException(404,'Захиалга олдсонгүй')
+    if order.status!='approved' or order.payment_status!='unpaid':
+        raise HTTPException(409,'Энэ захиалгыг одоо төлөх боломжгүй')
+    order.payment_status='paid'
+    order.status='paid'
+    order.paid_at=datetime.now(timezone.utc).replace(tzinfo=None)
+    session.commit();session.refresh(order)
+    return order_view(order,session)
 @app.get('/api/prescriptions/mine')
 def my_prescriptions(user:User=Depends(auth),session:Session=Depends(db)):
     if user.role!='customer':raise HTTPException(403,'Зөвхөн хэрэглэгчийн цахим жор')
@@ -363,7 +467,21 @@ def create_prescription(data:PrescriptionCreate,user:User=Depends(doctor),sessio
     prescription=Prescription(doctor_id=user.id,patient_id=patient.id,note=data.note.strip(),valid_until=data.valid_until)
     session.add(prescription);session.flush()
     for item in data.items:
-        session.add(PrescriptionItem(prescription_id=prescription.id,medicine_id=item.medicine_id,dosage=item.dosage.strip(),quantity=item.quantity,instructions=item.instructions.strip()))
+        medicine=medicines_by_id[item.medicine_id]
+        required_units=item.units_per_dose*item.times_per_day*item.duration_days
+        required_packs=ceil(required_units/medicine.units_per_pack)
+        dosage=item.dosage.strip() or f'{item.units_per_dose} {medicine.unit_label} × өдөрт {item.times_per_day} удаа × {item.duration_days} хоног'
+        session.add(PrescriptionItem(
+            prescription_id=prescription.id,
+            medicine_id=item.medicine_id,
+            dosage=dosage,
+            quantity=required_packs,
+            required_units=required_units,
+            units_per_dose=item.units_per_dose,
+            times_per_day=item.times_per_day,
+            duration_days=item.duration_days,
+            instructions=item.instructions.strip(),
+        ))
     session.commit();session.refresh(prescription)
     return prescription_view(prescription,session)
 @app.get('/api/admin/summary')
@@ -414,8 +532,6 @@ def decide(order_id:int,decision:str,user:User=Depends(staff),session:Session=De
             if changed.rowcount!=1:
                 session.rollback()
                 raise HTTPException(409,'Үлдэгдэл хүрэлцэхгүй эсвэл хугацаа дууссан')
-            usage=session.scalar(select(PrescriptionUsage).where(PrescriptionUsage.order_item_id==item.id))
-            if usage:usage.status='used'
     else:
         order_item_ids=select(OrderItem.id).where(OrderItem.order_id==order.id)
         for usage in session.scalars(select(PrescriptionUsage).where(PrescriptionUsage.order_item_id.in_(order_item_ids))).all():
@@ -423,6 +539,26 @@ def decide(order_id:int,decision:str,user:User=Depends(staff),session:Session=De
     order.status='approved' if decision=='approve' else 'rejected'
     session.commit()
     session.refresh(order)
+    return order_view(order,session)
+@app.patch('/api/staff/orders/{order_id}/fulfillment/advance')
+def advance_order(order_id:int,user:User=Depends(staff),session:Session=Depends(db)):
+    order=session.scalar(select(Order).where(Order.id==order_id,Order.pharmacy_id==user.pharmacy_id))
+    if not order:raise HTTPException(404,'Захиалга олдсонгүй')
+    transitions={
+        'paid':'preparing',
+        'preparing':'ready' if order.pickup else 'out_for_delivery',
+        'ready':'completed',
+        'out_for_delivery':'completed',
+    }
+    next_status=transitions.get(order.status)
+    if not next_status:raise HTTPException(409,'Энэ захиалгын төлөвийг одоо ахиулах боломжгүй')
+    order.status=next_status
+    if next_status=='completed':
+        order.completed_at=datetime.now(timezone.utc).replace(tzinfo=None)
+        order_item_ids=select(OrderItem.id).where(OrderItem.order_id==order.id)
+        for usage in session.scalars(select(PrescriptionUsage).where(PrescriptionUsage.order_item_id.in_(order_item_ids))).all():
+            usage.status='used'
+    session.commit();session.refresh(order)
     return order_view(order,session)
 @app.patch('/api/staff/inventory/{inventory_id}')
 def update_stock(inventory_id:int,data:StockEdit,user:User=Depends(staff),session:Session=Depends(db)):
@@ -435,17 +571,46 @@ def update_stock(inventory_id:int,data:StockEdit,user:User=Depends(staff),sessio
     return inventory_view(inv,session)
 
 def migrate_schema():
-    """Apply small, idempotent upgrades for existing demo SQLite databases."""
-    user_columns={column['name'] for column in inspect(engine).get_columns('users')}
-    if 'pharmacy_id' not in user_columns:
-        with engine.begin() as connection:
-            connection.exec_driver_sql(
-                'ALTER TABLE users ADD COLUMN pharmacy_id INTEGER REFERENCES pharmacies(id)'
-            )
+    """Apply small, idempotent upgrades for existing demo databases."""
+    upgrades={
+        'users':{
+            'pharmacy_id':'pharmacy_id INTEGER REFERENCES pharmacies(id)',
+        },
+        'medicines':{
+            'units_per_pack':'units_per_pack INTEGER NOT NULL DEFAULT 10',
+            'unit_label':"unit_label VARCHAR(30) NOT NULL DEFAULT 'шахмал'",
+        },
+        'prescription_items':{
+            'required_units':'required_units INTEGER NOT NULL DEFAULT 1',
+            'units_per_dose':'units_per_dose INTEGER NOT NULL DEFAULT 1',
+            'times_per_day':'times_per_day INTEGER NOT NULL DEFAULT 1',
+            'duration_days':'duration_days INTEGER NOT NULL DEFAULT 1',
+        },
+        'orders':{
+            'delivery_fee':'delivery_fee INTEGER NOT NULL DEFAULT 0',
+            'payment_status':"payment_status VARCHAR(30) NOT NULL DEFAULT 'unpaid'",
+            'paid_at':'paid_at TIMESTAMP NULL',
+            'completed_at':'completed_at TIMESTAMP NULL',
+        },
+    }
+    existing_columns={
+        table:{column['name'] for column in inspect(engine).get_columns(table)}
+        for table in upgrades
+    }
+    convert_legacy_prescriptions='required_units' not in existing_columns['prescription_items']
+    with engine.begin() as connection:
+        for table,columns in upgrades.items():
+            for name,definition in columns.items():
+                if name not in existing_columns[table]:
+                    connection.exec_driver_sql(f'ALTER TABLE {table} ADD COLUMN {definition}')
+        connection.exec_driver_sql(
+            f'UPDATE orders SET delivery_fee = {DELIVERY_FEE} WHERE pickup = FALSE AND delivery_fee = 0'
+        )
+    return convert_legacy_prescriptions
 
 def seed():
     Base.metadata.create_all(engine)
-    migrate_schema()
+    convert_legacy_prescriptions=migrate_schema()
     with SessionLocal() as s:
         pharmacy_specs=[
             ('Энэрэл Фарм эмийн сан','Улаанбаатар, Сүхбаатар дүүрэг, 1-р хороо',47.9184,106.9177),
@@ -468,24 +633,24 @@ def seed():
         ps=ps[:len(pharmacy_specs)]
 
         medicine_specs=[
-            ('Парацетамол 500 мг','Өвчин намдаах эм',False,'Халууралт болон хөнгөн өвдөлтийн үед хэрэглэдэг эм'),
-            ('Ибупрофен 200 мг','Өвчин намдаах эм',False,'Өвдөлт, үрэвсэл намдаах үйлчилгээтэй эм'),
-            ('Витамин C 500 мг','Амин дэм',False,'Өдөр тутмын витамин C-ийн нэмэлт'),
-            ('Лоратадин 10 мг','Харшлын эм',False,'Харшлын шинж тэмдгийг багасгахад хэрэглэнэ'),
-            ('Амоксициллин 500 мг','Антибиотик эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
-            ('Омепразол 20 мг','Хоол боловсруулах эм',False,'Ходоодны хүчил ихсэх үед хэрэглэдэг эм'),
-            ('Цетиризин 10 мг','Харшлын эм',False,'Улирлын болон бусад харшлын шинж тэмдэгт хэрэглэнэ'),
-            ('Магни B6','Амин дэм',False,'Магни болон B6 аминдэмийн нэмэлт'),
-            ('Фамотидин 20 мг','Хоол боловсруулах эм',False,'Ходоодны хүчил ялгаралтыг бууруулах эм'),
-            ('Диклофенак 50 мг','Өвчин намдаах эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
-            ('Цефалексин 500 мг','Антибиотик эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
-            ('Азитромицин 250 мг','Антибиотик эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
-            ('Амлодипин 5 мг','Зүрх судасны эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
-            ('Метформин 500 мг','Чихрийн шижингийн эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
-            ('Аспирин 100 мг','Зүрх судасны эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
+            ('Парацетамол 500 мг','Өвчин намдаах эм',False,'Халууралт болон хөнгөн өвдөлтийн үед хэрэглэдэг эм',10,'шахмал'),
+            ('Ибупрофен 200 мг','Өвчин намдаах эм',False,'Өвдөлт, үрэвсэл намдаах үйлчилгээтэй эм',10,'шахмал'),
+            ('Витамин C 500 мг','Амин дэм',False,'Өдөр тутмын витамин C-ийн нэмэлт',20,'шахмал'),
+            ('Лоратадин 10 мг','Харшлын эм',False,'Харшлын шинж тэмдгийг багасгахад хэрэглэнэ',10,'шахмал'),
+            ('Амоксициллин 500 мг','Антибиотик эм',True,'Зөвхөн эмчийн цахим жороор олгоно',10,'капсул'),
+            ('Омепразол 20 мг','Хоол боловсруулах эм',False,'Ходоодны хүчил ихсэх үед хэрэглэдэг эм',14,'капсул'),
+            ('Цетиризин 10 мг','Харшлын эм',False,'Улирлын болон бусад харшлын шинж тэмдэгт хэрэглэнэ',10,'шахмал'),
+            ('Магни B6','Амин дэм',False,'Магни болон B6 аминдэмийн нэмэлт',30,'шахмал'),
+            ('Фамотидин 20 мг','Хоол боловсруулах эм',False,'Ходоодны хүчил ялгаралтыг бууруулах эм',20,'шахмал'),
+            ('Диклофенак 50 мг','Өвчин намдаах эм',True,'Зөвхөн эмчийн цахим жороор олгоно',10,'шахмал'),
+            ('Цефалексин 500 мг','Антибиотик эм',True,'Зөвхөн эмчийн цахим жороор олгоно',10,'капсул'),
+            ('Азитромицин 250 мг','Антибиотик эм',True,'Зөвхөн эмчийн цахим жороор олгоно',6,'шахмал'),
+            ('Амлодипин 5 мг','Зүрх судасны эм',True,'Зөвхөн эмчийн цахим жороор олгоно',30,'шахмал'),
+            ('Метформин 500 мг','Чихрийн шижингийн эм',True,'Зөвхөн эмчийн цахим жороор олгоно',30,'шахмал'),
+            ('Аспирин 100 мг','Зүрх судасны эм',True,'Зөвхөн эмчийн цахим жороор олгоно',30,'шахмал'),
         ]
         ms=[]
-        for name,category,prescription_required,description in medicine_specs:
+        for name,category,prescription_required,description,units_per_pack,unit_label in medicine_specs:
             medicine=s.scalar(select(Medicine).where(Medicine.name==name))
             if not medicine:
                 medicine=Medicine(name=name)
@@ -493,8 +658,17 @@ def seed():
             medicine.category=category
             medicine.prescription_required=prescription_required
             medicine.description=description
+            medicine.units_per_pack=units_per_pack
+            medicine.unit_label=unit_label
             ms.append(medicine)
         s.flush()
+
+        if convert_legacy_prescriptions:
+            for item in s.scalars(select(PrescriptionItem)).all():
+                medicine=s.get(Medicine,item.medicine_id)
+                legacy_units=item.quantity
+                item.required_units=legacy_units
+                item.quantity=ceil(legacy_units/medicine.units_per_pack)
 
         for pi,pharmacy in enumerate(ps):
             for mi,medicine in enumerate(ms):
