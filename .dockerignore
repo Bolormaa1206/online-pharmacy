@@ -1,0 +1,10 @@
+.git
+.DS_Store
+**/__pycache__
+**/*.pyc
+backend/.venv
+backend/.secret_key
+backend/pharmacy.db
+frontend/node_modules
+frontend/dist
+backend/get-pip.py

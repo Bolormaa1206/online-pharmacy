@@ -1,0 +1,10 @@
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+backend/pharmacy.db
+backend/.secret_key
+.env
+.DS_Store
+frontend/dist/
+backend/get-pip.py
