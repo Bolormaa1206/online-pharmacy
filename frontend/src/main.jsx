@@ -40,7 +40,9 @@ function App() {
   const [inventory, setInventory] = useState([]);
   const [pharmacies, setPharmacies] = useState([]);
   const [q, setQ] = useState('');
+  const [visibleCount, setVisibleCount] = useState(6);
   const [cart, setCart] = useState([]);
+  const [cartNotice, setCartNotice] = useState('');
   const [token, setToken] = useState(localStorage.getItem('pharmacy_token'));
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState('login');
@@ -73,6 +75,12 @@ function App() {
   }
 
   useEffect(() => { refresh(); }, []);
+  useEffect(() => { setVisibleCount(6); }, [q]);
+  useEffect(() => {
+    if (!cartNotice) return undefined;
+    const timeout = window.setTimeout(() => setCartNotice(''), 2200);
+    return () => window.clearTimeout(timeout);
+  }, [cartNotice]);
   useEffect(() => {
     if (token) {
       request('/me').then(setUser).catch(() => {
@@ -138,7 +146,7 @@ function App() {
         ? prev.map(x => x === old ? {...x, quantity: Math.min(item.stock, x.quantity + 1)} : x)
         : [...prev, {pharmacy_id: item.pharmacy_id, medicine_id: item.medicine_id, quantity: 1, price: item.price, name: medicine.name, pharmacy_name: item.pharmacy_name, prescription_required: medicine.prescription_required, stock: item.stock}];
     });
-    message(medicine.prescription_required ? 'Сагсанд нэмлээ. Захиалах үед цахим жорыг автоматаар шалгана.' : 'Сагсанд нэмлээ');
+    setCartNotice('Сагсанд тань нэмэгдлээ');
   }
 
   function changeQty(target, diff) {
@@ -192,6 +200,7 @@ function App() {
   }
 
   const filtered = useMemo(() => medicines.filter(m => (m.name + ' ' + m.category).toLowerCase().includes(q.toLowerCase())), [medicines, q]);
+  const visibleMedicines = filtered.slice(0, visibleCount);
   const rxMedicines = medicines.filter(m => m.prescription_required);
   const total = cart.reduce((sum, x) => sum + x.price * x.quantity, 0);
   const count = cart.reduce((sum, x) => sum + x.quantity, 0);
@@ -219,19 +228,21 @@ function App() {
         {notice && <div className="alert success"><CheckCircle2 size={18}/>{notice}<button onClick={() => setNotice('')}>×</button></div>}
         {error && <div className="alert failure"><XCircle size={18}/>{error}<button onClick={() => setError('')}>×</button></div>}
       </div>
+      {cartNotice && <div className="cart-toast"><CheckCircle2 size={19}/><span>{cartNotice}</span></div>}
 
       {page === 'catalog' && <>
-        <section className="hero"><div><span className="eyebrow">ДИПЛОМЫН ТУРШИЛТЫН СИСТЕМ</span><h1>Хэрэгтэй эмээ нэг дороос<br/><em>хайж, харьцуулж, захиалаарай.</em></h1><p>Эмийн сангуудын үнэ, үлдэгдэл, байршлыг харьцуулан захиалга үүсгэх боломжтой.</p><div className="search"><Search color="#64748b" size={20}/><input value={q} onChange={e => setQ(e.target.value)} placeholder="Эмийн нэр эсвэл төрлөөр хайх..."/></div></div><div className="hero-art"><span>✚</span><p>Таны эрүүл мэнд<br/>бидний анхааралд</p></div></section>
-        <div className="heading"><div><h2>Эмийн бүтээгдэхүүнүүд</h2><p>{filtered.length} бүтээгдэхүүн · Үнэ болон үлдэгдэл нь туршилтын өгөгдөл</p></div></div>
-        <div className="productgrid">{filtered.map(m => {
+        <section className="hero"><div><span className="eyebrow">ОНЛАЙН ЭМИЙН САНГИЙН СИСТЕМ</span><h1>Хэрэгтэй эмээ нэг дороос<br/><em>хайж, харьцуулж, захиалаарай.</em></h1><p>Эмийн сангуудын үнэ, үлдэгдэл, байршлыг харьцуулан захиалга үүсгэх боломжтой.</p><div className="search"><Search color="#64748b" size={20}/><input value={q} onChange={e => setQ(e.target.value)} placeholder="Эмийн нэр эсвэл төрлөөр хайх..."/></div></div><div className="hero-art"><span>✚</span><p>Та эрүүл мэнддээ<br/>анхаараарай</p></div></section>
+        <div className="heading"><div><h2>Эмийн бүтээгдэхүүнүүд</h2><p>{filtered.length} бүтээгдэхүүн · Эмийн сангуудын үнэ болон үлдэгдэл</p></div></div>
+        <div className="productgrid">{visibleMedicines.map(m => {
           const offers = inventory.filter(i => i.medicine_id === m.id && i.stock > 0 && i.expiry >= new Date().toISOString().slice(0, 10));
           return <article className="product" key={m.id}><div className="medicine-icon"><Package size={34}/></div><div className="product-body"><span className="category">{m.category}</span><h3>{m.name}</h3>{m.prescription_required && <span className="rx">Цахим жор шаардлагатай</span>}<p className="muted">{offers.length} эмийн санд байна</p><div className="offers">{offers.length ? offers.map(o => <div className="offer" key={o.id}><div><b>{o.pharmacy_name}</b><small>Үлдэгдэл: {o.stock} ширхэг</small></div><div className="offer-end"><strong>{money(o.price)}</strong><button className="smallbtn" onClick={() => add(o, m)} title="Сагсанд нэмэх"><Plus size={17}/></button></div></div>) : <p className="muted">Одоогоор үлдэгдэлгүй</p>}</div></div></article>;
         })}</div>
+        {visibleCount < filtered.length && <div className="load-more-wrap"><button className="load-more" onClick={() => setVisibleCount(count => count + 6)}>Илүү ихийг харах <span>{Math.min(6, filtered.length - visibleCount)}</span></button></div>}
       </>}
 
-      {page === 'pharmacies' && <><div className="heading"><div><h1>Эмийн сангууд</h1><p>Доорх хаяг, цэгүүд нь зөвхөн туршилтын жишээ байршил юм.</p></div></div><div className="pharmacygrid">{pharmacies.map(p => <div className="panel" key={p.id}><div className="pin"><MapPin/></div><h3>{p.name}</h3><p>{p.address}</p><div className="mapframe"><iframe loading="lazy" title={p.name} src={`https://www.openstreetmap.org/export/embed.html?bbox=${p.lng - .008}%2C${p.lat - .005}%2C${p.lng + .008}%2C${p.lat + .005}&layer=mapnik&marker=${p.lat}%2C${p.lng}`}/></div><button className="outline" onClick={() => {setPage('catalog'); setQ('');}}>Эмүүдийг харах</button></div>)}</div></>}
+      {page === 'pharmacies' && <><div className="heading"><div><h1>Эмийн сангууд</h1><p>Салбаруудын хаяг болон байршлын мэдээлэл</p></div></div><div className="pharmacygrid">{pharmacies.map(p => <div className="panel" key={p.id}><div className="pin"><MapPin/></div><h3>{p.name}</h3><p>{p.address}</p><div className="mapframe"><iframe loading="lazy" title={p.name} src={`https://www.openstreetmap.org/export/embed.html?bbox=${p.lng - .008}%2C${p.lat - .005}%2C${p.lng + .008}%2C${p.lat + .005}&layer=mapnik&marker=${p.lat}%2C${p.lng}`}/></div><button className="outline" onClick={() => {setPage('catalog'); setQ('');}}>Эмүүдийг харах</button></div>)}</div></>}
 
-      {page === 'login' && <div className="auth panel"><div className="pin"><UserRound/></div><h1>{authMode === 'login' ? 'Нэвтрэх' : 'Бүртгүүлэх'}</h1><p>Хэрэглэгч бүр өөрийн эрхээр нэвтэрнэ.</p><form onSubmit={submitAuth}>{authMode === 'register' && <label>Нэр<input required minLength="2" value={authForm.name} onChange={e => setAuthForm({...authForm, name: e.target.value})}/></label>}<label>Имэйл<input required type="email" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})}/></label><label>Нууц үг<input required type="password" minLength="8" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})}/></label><button disabled={busy} className="primary" type="submit">{authMode === 'login' ? 'Нэвтрэх' : 'Бүртгүүлэх'}</button></form><button className="link" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>{authMode === 'login' ? 'Шинэ хэрэглэгч үү? Бүртгүүлэх' : 'Бүртгэлтэй юу? Нэвтрэх'}</button><div className="demo"><b>Туршилтын нэвтрэлт</b><br/>Хэрэглэгч: customer@demo.mn / DemoCustomer123!<br/>Эмч: doctor@demo.mn / DemoDoctor123!<br/>Админ: admin@demo.mn / DemoAdmin123!<br/>Эм зүйч: staff@demo.mn / DemoStaff123!</div></div>}
+      {page === 'login' && <div className="auth panel"><div className="pin"><UserRound/></div><h1>{authMode === 'login' ? 'Нэвтрэх' : 'Бүртгүүлэх'}</h1><p>Хэрэглэгч бүр өөрийн эрхээр нэвтэрнэ.</p><form onSubmit={submitAuth}>{authMode === 'register' && <label>Нэр<input required minLength="2" value={authForm.name} onChange={e => setAuthForm({...authForm, name: e.target.value})}/></label>}<label>Имэйл<input required type="email" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})}/></label><label>Нууц үг<input required type="password" minLength="8" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})}/></label><button disabled={busy} className="primary" type="submit">{authMode === 'login' ? 'Нэвтрэх' : 'Бүртгүүлэх'}</button></form><button className="link" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>{authMode === 'login' ? 'Шинэ хэрэглэгч үү? Бүртгүүлэх' : 'Бүртгэлтэй юу? Нэвтрэх'}</button><div className="demo"><b>Нэвтрэх эрхүүд</b><br/>Бат-Эрдэнийн Номин: customer@demo.mn / DemoCustomer123!<br/>Дотрын эмч Б. Энхтөр: doctor@demo.mn / DemoDoctor123!<br/>Админ Г. Солонго: admin@demo.mn / DemoAdmin123!<br/>Эм зүйч А. Мөнхзул: staff@demo.mn / DemoStaff123!</div></div>}
 
       {page === 'cart' && <><div className="heading"><div><h1>Миний сагс</h1><p>Өөр өөр эмийн сангаас сонгосон эмүүд тус тусдаа захиалга болно.</p></div></div>{cart.length ? <div className="twocol"><div className="panel">{cart.map((x, i) => <div className="cartline" key={i}><div className="medicine-icon tiny"><Package/></div><div className="grow"><b>{x.name}</b><small>{x.pharmacy_name}</small>{x.prescription_required && <span className="rx inline-rx">Цахим жор</span>}<strong>{money(x.price * x.quantity)}</strong></div><div className="quantity"><button onClick={() => changeQty(x, -1)}><Minus size={14}/></button>{x.quantity}<button onClick={() => changeQty(x, 1)}><Plus size={14}/></button></div></div>)}</div><div className="panel checkout"><h2>Захиалгын мэдээлэл</h2><div className="total"><span>Нийт дүн</span><b>{money(total)}</b></div><label className="radio"><input type="radio" checked={pickup} onChange={() => setPickup(true)}/> Очиж авах</label><label className="radio"><input type="radio" checked={!pickup} onChange={() => setPickup(false)}/> Хүргүүлэх (зөвхөн загвар)</label>{!pickup && <label>Хүргэлтийн хаяг<textarea value={address} onChange={e => setAddress(e.target.value)} placeholder="Хаяг"/></label>}<div className="disclaimer">Жороор олгох эм байвал систем таны эмчээс ирсэн хүчинтэй цахим жорыг автоматаар шалгана. Эм зүйч захиалгыг хянаж баталгаажуулна. Төлбөр, хүргэлт бодитоор хийгдэхгүй.</div><button className="primary" disabled={busy} onClick={checkout}>Захиалга илгээх</button></div></div> : <div className="empty panel"><ShoppingCart size={38}/><h3>Таны сагс хоосон байна</h3><button className="primary" onClick={() => setPage('catalog')}>Эм хайх</button></div>}</>}
 
@@ -245,7 +256,7 @@ function App() {
 
       {page === 'admin' && user?.role === 'admin' && <><div className="heading"><div><h1>Админы хяналтын хэсэг</h1><p>Системийн хэрэглэгч, захиалга, жор болон эмийн сангийн нэгдсэн мэдээлэл</p></div><button className="outline" onClick={loadAdmin}>Шинэчлэх</button></div>{adminSummary && <><div className="statgrid"><StatCard icon={UsersRound} label="Нийт хэрэглэгч" value={adminSummary.counts.users}/><StatCard icon={UserRound} label="Үйлчлүүлэгч" value={adminSummary.counts.customers}/><StatCard icon={ClipboardList} label="Захиалга" value={adminSummary.counts.orders}/><StatCard icon={FileText} label="Цахим жор" value={adminSummary.counts.prescriptions}/><StatCard icon={MapPin} label="Эмийн сан" value={adminSummary.counts.pharmacies}/></div><h2 className="space">Хэрэглэгчид</h2><div className="panel table-scroll"><table><thead><tr><th>ID</th><th>Нэр</th><th>Имэйл</th><th>Эрх</th><th>Эмийн сангийн ID</th></tr></thead><tbody>{adminSummary.users.map(u => <tr key={u.id}><td>#{u.id}</td><td>{u.name}</td><td>{u.email}</td><td><span className={`role role-${u.role}`}>{roleName(u.role)}</span></td><td>{u.pharmacy_id || '—'}</td></tr>)}</tbody></table></div><h2 className="space">Сүүлийн захиалгууд</h2>{adminSummary.orders.length ? adminSummary.orders.map(o => <OrderCard key={o.id} order={o}/>) : <div className="panel">Захиалга байхгүй байна.</div>}</>}</>}
     </main>
-    <footer>© 2026 Онлайн эмийн сангийн захиалгын веб систем · Дипломын туршилтын прототип · Бодит эм худалдах үйлчилгээ биш</footer>
+    <footer>© 2026 Онлайн эмийн сангийн захиалгын веб систем</footer>
   </>;
 }
 
