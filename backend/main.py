@@ -447,48 +447,74 @@ def seed():
     Base.metadata.create_all(engine)
     migrate_schema()
     with SessionLocal() as s:
-        ps=list(s.scalars(select(Pharmacy).order_by(Pharmacy.id)).all())
-        if not ps:
-            ps=[
-                Pharmacy(name='Энхмэнд эмийн сан',address='Улаанбаатар, Сүхбаатар дүүрэг (жишээ байршил)',lat=47.9184,lng=106.9177),
-                Pharmacy(name='Амар Фарм эмийн сан',address='Улаанбаатар, Баянзүрх дүүрэг (жишээ байршил)',lat=47.9213,lng=106.9472),
-                Pharmacy(name='Итгэл Мед эмийн сан',address='Улаанбаатар, Чингэлтэй дүүрэг (жишээ байршил)',lat=47.9285,lng=106.9050),
-            ]
-            s.add_all(ps)
-            s.flush()
-
-        demo_pharmacy_names=[
-            'Энхмэнд эмийн сан',
-            'Амар Фарм эмийн сан',
-            'Итгэл Мед эмийн сан',
+        pharmacy_specs=[
+            ('Энэрэл Фарм эмийн сан','Улаанбаатар, Сүхбаатар дүүрэг, 1-р хороо',47.9184,106.9177),
+            ('Түмэн Эрүүл эмийн сан','Улаанбаатар, Баянзүрх дүүрэг, 4-р хороо',47.9213,106.9472),
+            ('Саруул Фарм эмийн сан','Улаанбаатар, Чингэлтэй дүүрэг, 3-р хороо',47.9285,106.9050),
         ]
-        for pharmacy,new_name in zip(ps,demo_pharmacy_names):
-            if pharmacy.name.startswith('Туршилтын эмийн сан'):
-                pharmacy.name=new_name
+        ps=list(s.scalars(select(Pharmacy).order_by(Pharmacy.id)).all())
+        for index,(name,address,lat,lng) in enumerate(pharmacy_specs):
+            if index < len(ps):
+                pharmacy=ps[index]
+                pharmacy.name=name
+                pharmacy.address=address
+                pharmacy.lat=lat
+                pharmacy.lng=lng
+            else:
+                pharmacy=Pharmacy(name=name,address=address,lat=lat,lng=lng)
+                s.add(pharmacy)
+                ps.append(pharmacy)
+        s.flush()
+        ps=ps[:len(pharmacy_specs)]
 
-        ms=list(s.scalars(select(Medicine).order_by(Medicine.id)).all())
-        if not ms:
-            ms=[
-                Medicine(name='Парацетамол 500 мг',category='Өвдөлт намдаах',description='Туршилтын мэдээлэл; хэрэглэх заавар биш'),
-                Medicine(name='Ибупрофен 200 мг',category='Өвдөлт намдаах',description='Туршилтын мэдээлэл; хэрэглэх заавар биш'),
-                Medicine(name='Витамин C 500 мг',category='Витамин'),
-                Medicine(name='Лоратадин 10 мг',category='Харшил'),
-                Medicine(name='Амоксициллин 500 мг',category='Антибиотик',prescription_required=True),
-                Medicine(name='Омепразол 20 мг',category='Хоол боловсруулах'),
-            ]
-            s.add_all(ms)
-            s.flush()
+        medicine_specs=[
+            ('Парацетамол 500 мг','Өвчин намдаах эм',False,'Халууралт болон хөнгөн өвдөлтийн үед хэрэглэдэг эм'),
+            ('Ибупрофен 200 мг','Өвчин намдаах эм',False,'Өвдөлт, үрэвсэл намдаах үйлчилгээтэй эм'),
+            ('Витамин C 500 мг','Амин дэм',False,'Өдөр тутмын витамин C-ийн нэмэлт'),
+            ('Лоратадин 10 мг','Харшлын эм',False,'Харшлын шинж тэмдгийг багасгахад хэрэглэнэ'),
+            ('Амоксициллин 500 мг','Антибиотик эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
+            ('Омепразол 20 мг','Хоол боловсруулах эм',False,'Ходоодны хүчил ихсэх үед хэрэглэдэг эм'),
+            ('Цетиризин 10 мг','Харшлын эм',False,'Улирлын болон бусад харшлын шинж тэмдэгт хэрэглэнэ'),
+            ('Магни B6','Амин дэм',False,'Магни болон B6 аминдэмийн нэмэлт'),
+            ('Фамотидин 20 мг','Хоол боловсруулах эм',False,'Ходоодны хүчил ялгаралтыг бууруулах эм'),
+            ('Диклофенак 50 мг','Өвчин намдаах эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
+            ('Цефалексин 500 мг','Антибиотик эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
+            ('Азитромицин 250 мг','Антибиотик эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
+            ('Амлодипин 5 мг','Зүрх судасны эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
+            ('Метформин 500 мг','Чихрийн шижингийн эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
+            ('Аспирин 100 мг','Зүрх судасны эм',True,'Зөвхөн эмчийн цахим жороор олгоно'),
+        ]
+        ms=[]
+        for name,category,prescription_required,description in medicine_specs:
+            medicine=s.scalar(select(Medicine).where(Medicine.name==name))
+            if not medicine:
+                medicine=Medicine(name=name)
+                s.add(medicine)
+            medicine.category=category
+            medicine.prescription_required=prescription_required
+            medicine.description=description
+            ms.append(medicine)
+        s.flush()
 
-        if not s.scalar(select(Inventory).limit(1)):
-            for pi,p in enumerate(ps):
-                for mi,m in enumerate(ms):
-                    if (pi,mi) in ((0,4),(2,1)):continue
-                    s.add(Inventory(pharmacy_id=p.id,medicine_id=m.id,price=1800+mi*1250+pi*370,stock=(mi+pi+1)*3,expiry='2028-12-31'))
+        for pi,pharmacy in enumerate(ps):
+            for mi,medicine in enumerate(ms):
+                inventory=s.scalar(select(Inventory).where(
+                    Inventory.pharmacy_id==pharmacy.id,
+                    Inventory.medicine_id==medicine.id,
+                ))
+                if not inventory:
+                    s.add(Inventory(
+                        pharmacy_id=pharmacy.id,
+                        medicine_id=medicine.id,
+                        price=1800+mi*920+pi*370,
+                        stock=8+((mi*3+pi*5)%24),
+                        expiry='2029-12-31',
+                    ))
 
         demo_staff=[
-            ('Туршилтын эм зүйч А','staff@demo.mn'),
-            ('Туршилтын эм зүйч Б','staff-b@demo.mn'),
-            ('Туршилтын эм зүйч В','staff-c@demo.mn'),
+            ('Эм зүйч А. Мөнхзул','staff@demo.mn'),
+            ('Эм зүйч Д. Нарантуяа','staff-b@demo.mn'),
+            ('Эм зүйч Б. Тэмүүлэн','staff-c@demo.mn'),
         ]
         for pharmacy,(name,email) in zip(ps,demo_staff):
             user=s.scalar(select(User).where(User.email==email))
@@ -500,9 +526,9 @@ def seed():
                 s.add(User(name=name,email=email,password_hash=hash_password('DemoStaff123!'),role='staff',pharmacy_id=pharmacy.id))
 
         demo_accounts=[
-            ('Туршилтын хэрэглэгч','customer@demo.mn','DemoCustomer123!','customer'),
-            ('Туршилтын эмч','doctor@demo.mn','DemoDoctor123!','doctor'),
-            ('Системийн админ','admin@demo.mn','DemoAdmin123!','admin'),
+            ('Бат-Эрдэнийн Номин','customer@demo.mn','DemoCustomer123!','customer'),
+            ('Дотрын эмч Б. Энхтөр','doctor@demo.mn','DemoDoctor123!','doctor'),
+            ('Админ Г. Солонго','admin@demo.mn','DemoAdmin123!','admin'),
         ]
         for name,email,password,role in demo_accounts:
             user=s.scalar(select(User).where(User.email==email))
