@@ -47,6 +47,8 @@ class Pharmacy(Base):
     address: Mapped[str] = mapped_column(String(250))
     lat: Mapped[float] = mapped_column(Float)
     lng: Mapped[float] = mapped_column(Float)
+    open_time: Mapped[str] = mapped_column(String(5), default='08:00')
+    close_time: Mapped[str] = mapped_column(String(5), default='22:00')
 class Medicine(Base):
     __tablename__ = 'medicines'
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -351,7 +353,7 @@ def me(user:User=Depends(auth)):
     return {'id':user.id,'name':user.name,'email':user.email,'role':user.role,'pharmacy_id':user.pharmacy_id}
 @app.get('/api/pharmacies')
 def pharmacies(session:Session=Depends(db)):
-    return [{'id':p.id,'name':p.name,'address':p.address,'lat':p.lat,'lng':p.lng} for p in session.scalars(select(Pharmacy)).all()]
+    return [{'id':p.id,'name':p.name,'address':p.address,'lat':p.lat,'lng':p.lng,'open_time':p.open_time,'close_time':p.close_time} for p in session.scalars(select(Pharmacy)).all()]
 @app.get('/api/medicines')
 def medicines(q:str='',session:Session=Depends(db)):
     records=session.scalars(select(Medicine).where(Medicine.name.ilike(f'%{q}%')).order_by(Medicine.name)).all()
@@ -585,6 +587,10 @@ def migrate_schema():
             'units_per_pack':'units_per_pack INTEGER NOT NULL DEFAULT 10',
             'unit_label':"unit_label VARCHAR(30) NOT NULL DEFAULT 'шахмал'",
         },
+        'pharmacies':{
+            'open_time':"open_time VARCHAR(5) NOT NULL DEFAULT '08:00'",
+            'close_time':"close_time VARCHAR(5) NOT NULL DEFAULT '22:00'",
+        },
         'prescription_items':{
             'required_units':'required_units INTEGER NOT NULL DEFAULT 1',
             'units_per_dose':'units_per_dose INTEGER NOT NULL DEFAULT 1',
@@ -618,20 +624,27 @@ def seed():
     convert_legacy_prescriptions=migrate_schema()
     with SessionLocal() as s:
         pharmacy_specs=[
-            ('Энэрэл Фарм эмийн сан','Улаанбаатар, Сүхбаатар дүүрэг, 1-р хороо',47.9184,106.9177),
-            ('Түмэн Эрүүл эмийн сан','Улаанбаатар, Баянзүрх дүүрэг, 4-р хороо',47.9213,106.9472),
-            ('Саруул Фарм эмийн сан','Улаанбаатар, Чингэлтэй дүүрэг, 3-р хороо',47.9285,106.9050),
+            ('Энэрэл Фарм эмийн сан','Сүхбаатар дүүрэг, 1-р хороо, Сүхбаатарын талбайн зүүн тал',47.9184,106.9177,'08:00','22:00'),
+            ('Түмэн Эрүүл эмийн сан','Баянзүрх дүүрэг, 4-р хороо, 13-р хороолол',47.9138,106.9457,'09:00','21:00'),
+            ('Саруул Фарм эмийн сан','Чингэлтэй дүүрэг, 3-р хороо, Улсын их дэлгүүрийн хойд тал',47.9169,106.9058,'00:00','23:59'),
+            ('Ногоон Навч эмийн сан','Баянгол дүүрэг, 13-р хороо, 3, 4-р хороолол',47.9102,106.8748,'08:30','20:30'),
+            ('Амин Тус эмийн сан','Хан-Уул дүүрэг, 11-р хороо, Зайсан',47.8817,106.9128,'09:00','22:00'),
+            ('Тэгш Фарм эмийн сан','Сонгинохайрхан дүүрэг, 29-р хороо, Драгон төв',47.9119,106.8218,'08:00','20:00'),
+            ('Өргөө Фарм эмийн сан','Хан-Уул дүүрэг, 4-р хороо, Яармаг',47.8799,106.8379,'10:00','22:00'),
+            ('Итгэлт Фарм эмийн сан','Баянзүрх дүүрэг, 12-р хороо, Ботаник',47.9108,106.9902,'00:00','23:59'),
         ]
         ps=list(s.scalars(select(Pharmacy).order_by(Pharmacy.id)).all())
-        for index,(name,address,lat,lng) in enumerate(pharmacy_specs):
+        for index,(name,address,lat,lng,open_time,close_time) in enumerate(pharmacy_specs):
             if index < len(ps):
                 pharmacy=ps[index]
                 pharmacy.name=name
                 pharmacy.address=address
                 pharmacy.lat=lat
                 pharmacy.lng=lng
+                pharmacy.open_time=open_time
+                pharmacy.close_time=close_time
             else:
-                pharmacy=Pharmacy(name=name,address=address,lat=lat,lng=lng)
+                pharmacy=Pharmacy(name=name,address=address,lat=lat,lng=lng,open_time=open_time,close_time=close_time)
                 s.add(pharmacy)
                 ps.append(pharmacy)
         s.flush()
@@ -681,7 +694,7 @@ def seed():
                     Inventory.pharmacy_id==pharmacy.id,
                     Inventory.medicine_id==medicine.id,
                 ))
-                if not inventory:
+                if not inventory and (pi < 3 or (mi + pi) % 7 != 0):
                     s.add(Inventory(
                         pharmacy_id=pharmacy.id,
                         medicine_id=medicine.id,
@@ -694,6 +707,11 @@ def seed():
             ('Эм зүйч А. Мөнхзул','staff@demo.mn'),
             ('Эм зүйч Д. Нарантуяа','staff-b@demo.mn'),
             ('Эм зүйч Б. Тэмүүлэн','staff-c@demo.mn'),
+            ('Эм зүйч Н. Сувд','staff-d@demo.mn'),
+            ('Эм зүйч О. Мишээл','staff-e@demo.mn'),
+            ('Эм зүйч Г. Төгөлдөр','staff-f@demo.mn'),
+            ('Эм зүйч Ц. Намуун','staff-g@demo.mn'),
+            ('Эм зүйч Э. Анударь','staff-h@demo.mn'),
         ]
         for pharmacy,(name,email) in zip(ps,demo_staff):
             user=s.scalar(select(User).where(User.email==email))
@@ -703,6 +721,29 @@ def seed():
                 user.pharmacy_id=pharmacy.id
             else:
                 s.add(User(name=name,email=email,password_hash=hash_password('DemoStaff123!'),role='staff',pharmacy_id=pharmacy.id))
+
+        demo_patients=[
+            ('А. Анужин','patient01@demo.mn'),
+            ('Б. Батбаяр','patient02@demo.mn'),
+            ('Д. Дөлгөөн','patient03@demo.mn'),
+            ('Э. Энхжин','patient04@demo.mn'),
+            ('Г. Ганзориг','patient05@demo.mn'),
+            ('М. Марал','patient06@demo.mn'),
+            ('Н. Номин-Эрдэнэ','patient07@demo.mn'),
+            ('О. Оргил','patient08@demo.mn'),
+            ('С. Саруул','patient09@demo.mn'),
+            ('Т. Тэмүүлэн','patient10@demo.mn'),
+            ('Х. Хулан','patient11@demo.mn'),
+            ('Ц. Цэлмэг','patient12@demo.mn'),
+        ]
+        for name,email in demo_patients:
+            user=s.scalar(select(User).where(User.email==email))
+            if user:
+                user.name=name
+                user.role='customer'
+                user.pharmacy_id=None
+            else:
+                s.add(User(name=name,email=email,password_hash=hash_password('DemoPatient123!'),role='customer'))
 
         demo_accounts=[
             ('Бат-Эрдэнийн Номин','customer@demo.mn','DemoCustomer123!','customer'),
