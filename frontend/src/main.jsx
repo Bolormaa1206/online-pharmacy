@@ -100,6 +100,17 @@ const sortCandidates = (candidates, mode) => [...candidates].sort((a, b) => {
   if (mode === 'open') return Number(b.isOpen) - Number(a.isOpen) || a.distance - b.distance;
   return a.score - b.score;
 });
+const rankedMedicineOffers = (medicineId, inventory, pharmacies, selectedLocation, mode) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const candidates = inventory.filter(item => item.medicine_id === medicineId && item.stock > 0 && item.expiry >= today).map(offer => {
+    const pharmacy = pharmacies.find(item => item.id === offer.pharmacy_id);
+    const distance = distanceKm(selectedLocation, offer);
+    const isOpen = pharmacy ? pharmacyOpenStatus(pharmacy).isOpen : false;
+    const candidate = {...offer, distance, isOpen, total: offer.price + (pharmacy?.delivery_fee || 0), delivery_fee: pharmacy?.delivery_fee || 0};
+    return {...candidate, score: recommendationScore(candidate)};
+  });
+  return sortCandidates(candidates, mode);
+};
 const roleName = role => ({customer: 'Хэрэглэгч', doctor: 'Эмч', staff: 'Эм зүйч', admin: 'Админ'}[role] || role);
 const prescriptionStatus = status => ({active: 'Хүчинтэй', recommended: 'Эмчийн зөвлөмж', reserved: 'Эмийн санд хүсэлт илгээсэн', used: 'Эм олгосон', expired: 'Хугацаа дууссан'}[status] || status);
 const orderStatus = status => ({pending: 'Эм зүйч шалгаж байна', approved: 'Баталгаажсан · төлбөр хүлээж байна', paid: 'Төлбөр төлсөн', preparing: 'Эмийг бэлтгэж байна', ready: 'Очиж авахад бэлэн', out_for_delivery: 'Хүргэлтэд гарсан', completed: 'Хүлээлгэн өгсөн', rejected: 'Татгалзсан'}[status] || status);
@@ -111,6 +122,7 @@ function App() {
   const [pharmacies, setPharmacies] = useState([]);
   const [q, setQ] = useState('');
   const [visibleCount, setVisibleCount] = useState(6);
+  const [selectedMedicine, setSelectedMedicine] = useState(null);
   const [locationSearch, setLocationSearch] = useState(locationOptions[0].name);
   const [selectedLocation, setSelectedLocation] = useState(locationOptions[0]);
   const [locationPickerOpen, setLocationPickerOpen] = useState(false);
@@ -159,6 +171,16 @@ function App() {
 
   useEffect(() => { refresh(); }, []);
   useEffect(() => { setVisibleCount(6); }, [q]);
+  useEffect(() => {
+    if (!selectedMedicine) return undefined;
+    const closeOnEscape = event => { if (event.key === 'Escape') setSelectedMedicine(null); };
+    document.addEventListener('keydown', closeOnEscape);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', closeOnEscape);
+      document.body.style.overflow = '';
+    };
+  }, [selectedMedicine]);
   useEffect(() => {
     if (!cartNotice) return undefined;
     const timeout = window.setTimeout(() => setCartNotice(''), 2200);
@@ -483,15 +505,9 @@ function App() {
         <section className="hero"><div><span className="eyebrow">ОНЛАЙН ЭМИЙН САНГИЙН СИСТЕМ</span><h1>Хэрэгтэй эмээ нэг дороос<br/><em>хайж, харьцуулж, захиалаарай.</em></h1><p>Эмийн сангуудын үнэ, үлдэгдэл, байршлыг харьцуулан захиалга үүсгэх боломжтой.</p><div className="search"><Search color="#64748b" size={20}/><input value={q} onChange={e => setQ(e.target.value)} placeholder="Эмийн нэр эсвэл төрлөөр хайх..."/></div></div><div className="hero-art"><span>✚</span><p>Та эрүүл мэнддээ<br/>анхаараарай</p></div></section>
         <div className="heading"><div><h2>Эмийн бүтээгдэхүүнүүд</h2><p>{filtered.length} бүтээгдэхүүн · Эмийн үнэ, хүргэлт, зай, нөөц, ажиллах төлөвийг хамтатган харьцуулна</p></div><ComparisonTabs value={catalogSort} onChange={setCatalogSort}/></div>
         <div className="productgrid">{visibleMedicines.map(m => {
-          const offers = inventory.filter(i => i.medicine_id === m.id && i.stock > 0 && i.expiry >= new Date().toISOString().slice(0, 10)).map(offer => {
-            const pharmacy = pharmacies.find(item => item.id === offer.pharmacy_id);
-            const distance = distanceKm(selectedLocation, offer);
-            const isOpen = pharmacy ? pharmacyOpenStatus(pharmacy).isOpen : false;
-            const candidate = {...offer, distance, isOpen, total: offer.price + (pharmacy?.delivery_fee || 0)};
-            return {...candidate, score: recommendationScore(candidate)};
-          });
-          const rankedOffers = sortCandidates(offers, catalogSort);
-          return <article className="product" key={m.id}><div className="medicine-photo"><img loading="lazy" src={medicineImages[m.name]} alt={`${m.name} эмийн зураг`}/></div><div className="product-body"><span className="category">{m.category}</span><h3>{m.name}</h3><small className="pack-info">1 савлагаа = {m.units_per_pack} {m.unit_label}</small>{m.prescription_required && <span className="rx">Цахим жор шаардлагатай</span>}<p className="muted">{rankedOffers.length} хамтрагч эмийн санд байна</p><div className="offers">{rankedOffers.length ? rankedOffers.map((o, index) => <div className="offer" key={o.id}><div><div className="offer-name"><b>{o.pharmacy_name}</b>{index === 0 && catalogSort === 'recommended' && <span>Санал</span>}</div><small>{displayDistance(o.distance)} · {o.isOpen ? 'Нээлттэй' : 'Хаалттай'} · Үлдэгдэл {o.stock}</small><small>Хүргэлттэй нийт {money(o.total)}</small></div><div className="offer-end"><strong>{money(o.price)}</strong><button className="smallbtn" onClick={() => add(o, m)} title={m.prescription_required ? 'Цахим жороос сонгох' : 'Сагсанд нэмэх'}><Plus size={17}/></button></div></div>) : <p className="muted">Одоогоор үлдэгдэлгүй</p>}</div></div></article>;
+          const rankedOffers = rankedMedicineOffers(m.id, inventory, pharmacies, selectedLocation, catalogSort);
+          const recommended = rankedOffers[0];
+          return <article className="product" key={m.id}><div className="medicine-photo"><img loading="lazy" src={medicineImages[m.name]} alt={`${m.name} эмийн зураг`}/></div><div className="product-body"><span className="category">{m.category}</span><h3>{m.name}</h3><small className="pack-info">1 савлагаа = {m.units_per_pack} {m.unit_label}</small>{m.prescription_required && <span className="rx">Цахим жор шаардлагатай</span>}<p className="muted">{rankedOffers.length} хамтрагч эмийн санд байна</p>{recommended ? <div className="recommended-offer"><div><small>{catalogSort === 'recommended' ? 'Санал болгож буй' : comparisonOptions.find(([key]) => key === catalogSort)?.[1]}</small><b>{recommended.pharmacy_name}</b><span>{displayDistance(recommended.distance)} · {recommended.isOpen ? 'Нээлттэй' : 'Хаалттай'}</span></div><div><strong>{money(recommended.price)}</strong><small>Хүргэлттэй {money(recommended.total)}</small></div></div> : <p className="muted no-stock">Одоогоор үлдэгдэлгүй</p>}<button type="button" className="choose-pharmacy" disabled={!rankedOffers.length} onClick={() => setSelectedMedicine(m)}><MapPin size={17}/> Эмийн сан сонгох{rankedOffers.length ? ` · ${rankedOffers.length}` : ''}</button></div></article>;
         })}</div>
         {visibleCount < filtered.length && <div className="load-more-wrap"><button className="load-more" onClick={() => setVisibleCount(count => count + 6)}>Илүү ихийг харах <span>{Math.min(6, filtered.length - visibleCount)}</span></button></div>}
       </>}
@@ -553,11 +569,17 @@ function App() {
       {page === 'admin' && user?.role === 'admin' && <><div className="heading"><div><h1>Админы хяналтын хэсэг</h1><p>Системийн хэрэглэгч, захиалга, жор болон эмийн сангийн нэгдсэн мэдээлэл</p></div><button className="outline" onClick={loadAdmin}>Шинэчлэх</button></div>{adminSummary && <><div className="statgrid"><StatCard icon={UsersRound} label="Нийт хэрэглэгч" value={adminSummary.counts.users}/><StatCard icon={UserRound} label="Үйлчлүүлэгч" value={adminSummary.counts.customers}/><StatCard icon={ClipboardList} label="Захиалга" value={adminSummary.counts.orders}/><StatCard icon={FileText} label="Цахим жор" value={adminSummary.counts.prescriptions}/><StatCard icon={MapPin} label="Эмийн сан" value={adminSummary.counts.pharmacies}/></div><h2 className="space">Хэрэглэгчид</h2><div className="panel table-scroll"><table><thead><tr><th>ID</th><th>Нэр</th><th>Имэйл</th><th>Эрх</th><th>Эмийн сангийн ID</th></tr></thead><tbody>{adminSummary.users.map(u => <tr key={u.id}><td>#{u.id}</td><td>{u.name}</td><td>{u.email}</td><td><span className={`role role-${u.role}`}>{roleName(u.role)}</span></td><td>{u.pharmacy_id || '—'}</td></tr>)}</tbody></table></div><h2 className="space">Сүүлийн захиалгууд</h2>{adminSummary.orders.length ? adminSummary.orders.map(o => <OrderCard key={o.id} order={o}/>) : <div className="panel">Захиалга байхгүй байна.</div>}</>}</>}
     </main>
     <footer>© 2026 Онлайн эмийн сангийн захиалгын веб систем</footer>
+    {selectedMedicine && <PharmacyOfferModal medicine={selectedMedicine} inventory={inventory} pharmacies={pharmacies} selectedLocation={selectedLocation} sort={catalogSort} onSort={setCatalogSort} onClose={() => setSelectedMedicine(null)} onAdd={(offer, medicine) => {setSelectedMedicine(null); add(offer, medicine);}}/>}
   </>;
 }
 
 function ComparisonTabs({value, onChange}) {
   return <div className="comparison-tabs">{comparisonOptions.map(([key, label]) => <button type="button" key={key} className={value === key ? 'active' : ''} onClick={() => onChange(key)}>{label}</button>)}</div>;
+}
+
+function PharmacyOfferModal({medicine, inventory, pharmacies, selectedLocation, sort, onSort, onClose, onAdd}) {
+  const offers = rankedMedicineOffers(medicine.id, inventory, pharmacies, selectedLocation, sort);
+  return <div className="offer-modal-backdrop" role="presentation" onMouseDown={onClose}><section className="offer-modal" role="dialog" aria-modal="true" aria-labelledby="offer-modal-title" onMouseDown={event => event.stopPropagation()}><div className="offer-modal-head"><div className="medicine-photo tiny"><img src={medicineImages[medicine.name]} alt=""/></div><div><span className="category">{medicine.category}</span><h2 id="offer-modal-title">{medicine.name}</h2><p>{offers.length} хамтрагч эмийн сангийн баталгаажсан жишиг үнэ</p></div><button type="button" className="modal-close" onClick={onClose} aria-label="Хаах">×</button></div><div className="offer-modal-sort"><ComparisonTabs value={sort} onChange={onSort}/></div><div className="offer-modal-list">{offers.map((offer, index) => <article className={index === 0 ? 'modal-offer recommended' : 'modal-offer'} key={offer.id}><div className="modal-offer-rank">{index + 1}</div><div className="modal-offer-info"><div className="offer-name"><b>{offer.pharmacy_name}</b>{index === 0 && <span>Санал</span>}</div><small>{offer.address}</small><div className="modal-offer-meta"><span>{displayDistance(offer.distance)}</span><span className={offer.isOpen ? 'is-open' : 'is-closed'}>{offer.isOpen ? 'Одоо нээлттэй' : 'Одоо хаалттай'}</span><span>Үлдэгдэл {offer.stock}</span></div></div><div className="modal-offer-price"><small>Эмийн үнэ</small><strong>{money(offer.price)}</strong><span>Хүргэлт {money(offer.delivery_fee)}</span><b>Нийт {money(offer.total)}</b></div><button type="button" className="modal-add" onClick={() => onAdd(offer, medicine)}>{medicine.prescription_required ? 'Цахим жороос сонгох' : <><Plus size={17}/> Сагсанд нэмэх</>}</button></article>)}</div><div className="offer-modal-note">Үнэ, нөөц, хүргэлт нь дипломын туршилтын өгөгдөл. Захиалгыг зөвхөн хамтрагч эмийн сан руу илгээнэ.</div></section></div>;
 }
 
 function PrescriptionItemEditor({item, index, medicines, removable, onChange, onRemove}) {
