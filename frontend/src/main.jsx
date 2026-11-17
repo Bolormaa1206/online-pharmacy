@@ -82,6 +82,24 @@ const pharmacyOpenStatus = pharmacy => {
   const alwaysOpen = pharmacy.open_time === '00:00' && pharmacy.close_time === '23:59';
   return {isOpen: alwaysOpen || isOpen, hours: alwaysOpen ? '24 цаг' : `${pharmacy.open_time}–${pharmacy.close_time}`};
 };
+const comparisonOptions = [
+  ['recommended', 'Санал болгох'],
+  ['total', 'Нийт үнэ'],
+  ['distance', 'Хамгийн ойр'],
+  ['open', 'Одоо нээлттэй'],
+];
+const recommendationScore = candidate => (
+  candidate.total
+  + Math.min(candidate.distance, 15) * 650
+  + (candidate.isOpen ? 0 : 6000)
+  + Math.max(0, 8 - Math.min(candidate.stock || 0, 8)) * 120
+);
+const sortCandidates = (candidates, mode) => [...candidates].sort((a, b) => {
+  if (mode === 'total') return a.total - b.total || a.distance - b.distance;
+  if (mode === 'distance') return a.distance - b.distance || a.total - b.total;
+  if (mode === 'open') return Number(b.isOpen) - Number(a.isOpen) || a.distance - b.distance;
+  return a.score - b.score;
+});
 const roleName = role => ({customer: 'Хэрэглэгч', doctor: 'Эмч', staff: 'Эм зүйч', admin: 'Админ'}[role] || role);
 const prescriptionStatus = status => ({active: 'Хүчинтэй', recommended: 'Эмчийн зөвлөмж', reserved: 'Эмийн санд хүсэлт илгээсэн', used: 'Эм олгосон', expired: 'Хугацаа дууссан'}[status] || status);
 const orderStatus = status => ({pending: 'Эм зүйч шалгаж байна', approved: 'Баталгаажсан · төлбөр хүлээж байна', paid: 'Төлбөр төлсөн', preparing: 'Эмийг бэлтгэж байна', ready: 'Очиж авахад бэлэн', out_for_delivery: 'Хүргэлтэд гарсан', completed: 'Хүлээлгэн өгсөн', rejected: 'Татгалзсан'}[status] || status);
@@ -98,6 +116,9 @@ function App() {
   const [locationPickerOpen, setLocationPickerOpen] = useState(false);
   const [nearbyMedicineQuery, setNearbyMedicineQuery] = useState('');
   const [nearbyVisibleCount, setNearbyVisibleCount] = useState(3);
+  const [catalogSort, setCatalogSort] = useState('recommended');
+  const [locationSort, setLocationSort] = useState('recommended');
+  const [cartSort, setCartSort] = useState('recommended');
   const [locating, setLocating] = useState(false);
   const [cart, setCart] = useState([]);
   const [cartNotice, setCartNotice] = useState('');
@@ -255,6 +276,21 @@ function App() {
     setCart(prev => prev.filter(item => item !== target));
   }
 
+  function useBasketRecommendation(candidate) {
+    const offers = new Map(candidate.offers.map(offer => [offer.medicine_id, offer]));
+    setCart(current => current.map(item => {
+      const offer = offers.get(item.medicine_id);
+      return {
+        ...item,
+        pharmacy_id: candidate.pharmacy.id,
+        pharmacy_name: candidate.pharmacy.name,
+        price: offer.price,
+        stock: offer.stock,
+      };
+    }));
+    setCartNotice(`${candidate.pharmacy.name}-аас бүх эмийг нэг дор авахаар сонголоо`);
+  }
+
   async function checkout() {
     if (!user) { setPage('login'); return; }
     setBusy(true);
@@ -352,10 +388,66 @@ function App() {
 
   const filtered = useMemo(() => medicines.filter(m => (m.name + ' ' + m.category).toLowerCase().includes(q.toLowerCase())), [medicines, q]);
   const locationMatches = locationOptions.filter(location => `${location.name} ${location.address}`.toLowerCase().includes(locationSearch.trim().toLowerCase()));
-  const nearbyPharmacies = useMemo(() => pharmacies.map(pharmacy => ({...pharmacy, distance: distanceKm(selectedLocation, pharmacy)})).sort((a, b) => a.distance - b.distance), [pharmacies, selectedLocation]);
+  const cartRecommendations = useMemo(() => {
+    if (!cart.length) return [];
+    const today = new Date().toISOString().slice(0, 10);
+    const required = new Map();
+    cart.forEach(item => required.set(item.medicine_id, (required.get(item.medicine_id) || 0) + item.quantity));
+    const candidates = pharmacies.filter(pharmacy => pharmacy.is_partner).map(pharmacy => {
+      const offers = [...required.entries()].map(([medicineId, quantity]) => inventory.find(item => (
+        item.pharmacy_id === pharmacy.id
+        && item.medicine_id === medicineId
+        && item.stock >= quantity
+        && item.expiry >= today
+      ))).filter(Boolean);
+      if (offers.length !== required.size) return null;
+      const subtotal = [...required.entries()].reduce((sum, [medicineId, quantity]) => {
+        const offer = offers.find(item => item.medicine_id === medicineId);
+        return sum + offer.price * quantity;
+      }, 0);
+      const distance = distanceKm(selectedLocation, pharmacy);
+      const isOpen = pharmacyOpenStatus(pharmacy).isOpen;
+      const delivery = pickup ? 0 : pharmacy.delivery_fee;
+      const candidate = {
+        pharmacy,
+        offers,
+        subtotal,
+        delivery,
+        total: subtotal + delivery,
+        distance,
+        isOpen,
+        stock: Math.min(...offers.map(item => item.stock)),
+      };
+      return {...candidate, score: recommendationScore(candidate)};
+    }).filter(Boolean);
+    return sortCandidates(candidates, cartSort);
+  }, [cart, pharmacies, inventory, selectedLocation, pickup, cartSort]);
+  const nearbyPharmacies = useMemo(() => {
+    const term = nearbyMedicineQuery.trim().toLowerCase();
+    const matchingMedicineIds = new Set(medicines.filter(medicine => `${medicine.name} ${medicine.category}`.toLowerCase().includes(term)).map(medicine => medicine.id));
+    const basketCandidates = new Map(cartRecommendations.map(candidate => [candidate.pharmacy.id, candidate]));
+    const ranked = pharmacies.map(pharmacy => {
+      const distance = distanceKm(selectedLocation, pharmacy);
+      const isOpen = pharmacyOpenStatus(pharmacy).isOpen;
+      const offers = inventory.filter(item => item.pharmacy_id === pharmacy.id && (!term || matchingMedicineIds.has(item.medicine_id)));
+      const lowestOffer = offers.reduce((lowest, item) => !lowest || item.price < lowest.price ? item : lowest, null);
+      const basketCandidate = basketCandidates.get(pharmacy.id);
+      const total = basketCandidate?.total ?? (lowestOffer ? lowestOffer.price + pharmacy.delivery_fee : Number.MAX_SAFE_INTEGER);
+      const candidate = {...pharmacy, distance, isOpen, total, stock: basketCandidate?.stock || lowestOffer?.stock || 0, hasAllCart: Boolean(basketCandidate)};
+      return {...candidate, score: pharmacy.is_partner && lowestOffer ? recommendationScore(candidate) : Number.MAX_SAFE_INTEGER};
+    });
+    return ranked.sort((a, b) => {
+      if (locationSort === 'all') return Number(b.hasAllCart) - Number(a.hasAllCart) || a.distance - b.distance;
+      if (locationSort === 'distance') return a.distance - b.distance;
+      if (locationSort === 'open') return Number(b.isOpen) - Number(a.isOpen) || a.distance - b.distance;
+      if (locationSort === 'total') return a.total - b.total || a.distance - b.distance;
+      return a.score - b.score || a.distance - b.distance;
+    });
+  }, [pharmacies, selectedLocation, nearbyMedicineQuery, medicines, inventory, locationSort, cartRecommendations]);
   const visibleMedicines = filtered.slice(0, visibleCount);
   const total = cart.reduce((sum, x) => sum + x.price * x.quantity, 0);
-  const deliveryFee = pickup ? 0 : new Set(cart.map(x => x.pharmacy_id)).size * 5000;
+  const selectedPharmacyIds = [...new Set(cart.map(item => item.pharmacy_id))];
+  const deliveryFee = pickup ? 0 : selectedPharmacyIds.reduce((sum, pharmacyId) => sum + (pharmacies.find(pharmacy => pharmacy.id === pharmacyId)?.delivery_fee || 0), 0);
   const count = cart.reduce((sum, x) => sum + x.quantity, 0);
   const nav = [
     ['catalog', 'Эм хайх', Search],
@@ -389,10 +481,17 @@ function App() {
 
       {page === 'catalog' && <>
         <section className="hero"><div><span className="eyebrow">ОНЛАЙН ЭМИЙН САНГИЙН СИСТЕМ</span><h1>Хэрэгтэй эмээ нэг дороос<br/><em>хайж, харьцуулж, захиалаарай.</em></h1><p>Эмийн сангуудын үнэ, үлдэгдэл, байршлыг харьцуулан захиалга үүсгэх боломжтой.</p><div className="search"><Search color="#64748b" size={20}/><input value={q} onChange={e => setQ(e.target.value)} placeholder="Эмийн нэр эсвэл төрлөөр хайх..."/></div></div><div className="hero-art"><span>✚</span><p>Та эрүүл мэнддээ<br/>анхаараарай</p></div></section>
-        <div className="heading"><div><h2>Эмийн бүтээгдэхүүнүүд</h2><p>{filtered.length} бүтээгдэхүүн · Эмийн сангуудын үнэ болон үлдэгдэл</p></div></div>
+        <div className="heading"><div><h2>Эмийн бүтээгдэхүүнүүд</h2><p>{filtered.length} бүтээгдэхүүн · Эмийн үнэ, хүргэлт, зай, нөөц, ажиллах төлөвийг хамтатган харьцуулна</p></div><ComparisonTabs value={catalogSort} onChange={setCatalogSort}/></div>
         <div className="productgrid">{visibleMedicines.map(m => {
-          const offers = inventory.filter(i => i.medicine_id === m.id && i.stock > 0 && i.expiry >= new Date().toISOString().slice(0, 10));
-          return <article className="product" key={m.id}><div className="medicine-photo"><img loading="lazy" src={medicineImages[m.name]} alt={`${m.name} эмийн зураг`}/></div><div className="product-body"><span className="category">{m.category}</span><h3>{m.name}</h3><small className="pack-info">1 савлагаа = {m.units_per_pack} {m.unit_label}</small>{m.prescription_required && <span className="rx">Цахим жор шаардлагатай</span>}<p className="muted">{offers.length} эмийн санд байна</p><div className="offers">{offers.length ? offers.map(o => <div className="offer" key={o.id}><div><b>{o.pharmacy_name}</b><small>Үлдэгдэл: {o.stock} савлагаа</small></div><div className="offer-end"><strong>{money(o.price)}</strong><button className="smallbtn" onClick={() => add(o, m)} title={m.prescription_required ? 'Цахим жороос сонгох' : 'Сагсанд нэмэх'}><Plus size={17}/></button></div></div>) : <p className="muted">Одоогоор үлдэгдэлгүй</p>}</div></div></article>;
+          const offers = inventory.filter(i => i.medicine_id === m.id && i.stock > 0 && i.expiry >= new Date().toISOString().slice(0, 10)).map(offer => {
+            const pharmacy = pharmacies.find(item => item.id === offer.pharmacy_id);
+            const distance = distanceKm(selectedLocation, offer);
+            const isOpen = pharmacy ? pharmacyOpenStatus(pharmacy).isOpen : false;
+            const candidate = {...offer, distance, isOpen, total: offer.price + (pharmacy?.delivery_fee || 0)};
+            return {...candidate, score: recommendationScore(candidate)};
+          });
+          const rankedOffers = sortCandidates(offers, catalogSort);
+          return <article className="product" key={m.id}><div className="medicine-photo"><img loading="lazy" src={medicineImages[m.name]} alt={`${m.name} эмийн зураг`}/></div><div className="product-body"><span className="category">{m.category}</span><h3>{m.name}</h3><small className="pack-info">1 савлагаа = {m.units_per_pack} {m.unit_label}</small>{m.prescription_required && <span className="rx">Цахим жор шаардлагатай</span>}<p className="muted">{rankedOffers.length} хамтрагч эмийн санд байна</p><div className="offers">{rankedOffers.length ? rankedOffers.map((o, index) => <div className="offer" key={o.id}><div><div className="offer-name"><b>{o.pharmacy_name}</b>{index === 0 && catalogSort === 'recommended' && <span>Санал</span>}</div><small>{displayDistance(o.distance)} · {o.isOpen ? 'Нээлттэй' : 'Хаалттай'} · Үлдэгдэл {o.stock}</small><small>Хүргэлттэй нийт {money(o.total)}</small></div><div className="offer-end"><strong>{money(o.price)}</strong><button className="smallbtn" onClick={() => add(o, m)} title={m.prescription_required ? 'Цахим жороос сонгох' : 'Сагсанд нэмэх'}><Plus size={17}/></button></div></div>) : <p className="muted">Одоогоор үлдэгдэлгүй</p>}</div></div></article>;
         })}</div>
         {visibleCount < filtered.length && <div className="load-more-wrap"><button className="load-more" onClick={() => setVisibleCount(count => count + 6)}>Илүү ихийг харах <span>{Math.min(6, filtered.length - visibleCount)}</span></button></div>}
       </>}
@@ -408,7 +507,8 @@ function App() {
           </div>
           <div className="location-summary"><span><MapPin size={15}/>{selectedLocation.name}</span><small>Туршилтын байршил, цаг, үнэ болон нөөцийн мэдээлэл</small></div>
         </section>
-        <div className="nearby-heading"><div><h2>Хамгийн ойрын эмийн сангууд</h2><p>Зайгаар эрэмбэлсэн · эхний {Math.min(nearbyVisibleCount, nearbyPharmacies.length)} салбар</p></div>{nearbyMedicineQuery.trim() && <span>“{nearbyMedicineQuery.trim()}” хайлтын үр дүн</span>}</div>
+        <div className="nearby-heading"><div><h2>Эмийн сангийн харьцуулалт</h2><p>Сонгосон нөхцөлөөр эрэмбэлсэн · эхний {Math.min(nearbyVisibleCount, nearbyPharmacies.length)} салбар</p></div>{nearbyMedicineQuery.trim() && <span>“{nearbyMedicineQuery.trim()}” хайлтын үр дүн</span>}</div>
+        <div className="location-sort"><ComparisonTabs value={locationSort} onChange={setLocationSort}/>{cart.length > 0 && <button className={locationSort === 'all' ? 'active' : ''} onClick={() => setLocationSort('all')}>Бүх эм нэг дор</button>}</div>
         <div className="nearby-pharmacy-list">{nearbyPharmacies.slice(0, nearbyVisibleCount).map((pharmacy, index) => {
           const openStatus = pharmacyOpenStatus(pharmacy);
           const pharmacyStock = inventory.filter(item => item.pharmacy_id === pharmacy.id && item.stock > 0 && item.expiry >= new Date().toISOString().slice(0, 10));
@@ -418,11 +518,11 @@ function App() {
             return !medicineTerm || `${medicine?.name || ''} ${medicine?.category || ''}`.toLowerCase().includes(medicineTerm);
           });
           const shownStock = matchedStock.slice(0, medicineTerm ? 5 : 3);
-          return <article className="panel nearby-pharmacy" key={pharmacy.id}>
-            <div className="nearby-pharmacy-main"><div className="rank-pin"><span>{index + 1}</span><MapPin size={20}/></div><div className="nearby-pharmacy-info"><div className="pharmacy-title-line"><h3>{pharmacy.name}</h3><span className="distance-badge">{displayDistance(pharmacy.distance)}</span></div><p>{pharmacy.address}</p><div className="pharmacy-meta"><span className={openStatus.isOpen ? 'open-now' : 'closed-now'}>{openStatus.isOpen ? 'Одоо нээлттэй' : 'Одоо хаалттай'}</span><span><Clock size={15}/>{openStatus.hours}</span><span>{pharmacyStock.length} төрлийн эмийн нөөцтэй</span></div></div></div>
-            <div className={`availability-summary ${medicineTerm && !matchedStock.length ? 'unavailable' : ''}`}>{medicineTerm ? (matchedStock.length ? `Хайсан эм ${matchedStock.length} сонголтоор байна` : 'Хайсан эм одоогоор байхгүй') : 'Жишиг нөөц, үнэ'}</div>
-            <div className="nearby-stock-list">{shownStock.length ? shownStock.map(item => {const medicine = medicines.find(record => record.id === item.medicine_id); return <div className="nearby-stock-row" key={item.id}><div><b>{medicine?.name}</b><small>{medicine?.category} · Үлдэгдэл {item.stock} савлагаа</small></div><strong>{money(item.price)}</strong></div>;}) : <div className="stock-empty">Энэ хайлтад тохирох эмийн нөөц алга.</div>}</div>
-            <div className="pharmacy-card-actions"><button className="outline" onClick={() => {setPage('catalog'); setQ(nearbyMedicineQuery);}}>Эмийн каталогоос харах</button><a className="map-link" href={`https://www.openstreetmap.org/?mlat=${pharmacy.lat}&mlon=${pharmacy.lng}#map=16/${pharmacy.lat}/${pharmacy.lng}`} target="_blank" rel="noreferrer">Газрын зураг</a></div>
+          return <article className={`panel nearby-pharmacy ${pharmacy.is_partner ? '' : 'directory-only'}`} key={pharmacy.id}>
+            <div className="nearby-pharmacy-main"><div className="rank-pin"><span>{index + 1}</span><MapPin size={20}/></div><div className="nearby-pharmacy-info"><div className="pharmacy-title-line"><h3>{pharmacy.name}</h3><span className="distance-badge">{displayDistance(pharmacy.distance)}</span></div><div className="partner-line"><span className={pharmacy.is_partner ? 'partner-badge' : 'directory-badge'}>{pharmacy.is_partner ? 'Баталгаажсан хамтрагч' : 'Лавлах мэдээлэл'}</span>{pharmacy.hasAllCart && <span className="all-cart-badge">Сагсны бүх эм байна</span>}{index === 0 && locationSort === 'recommended' && pharmacy.is_partner && <span className="recommend-badge">Санал болгож байна</span>}</div><p>{pharmacy.address}</p><div className="pharmacy-meta"><span className={openStatus.isOpen ? 'open-now' : 'closed-now'}>{openStatus.isOpen ? 'Одоо нээлттэй' : 'Одоо хаалттай'}</span><span><Clock size={15}/>{openStatus.hours}</span>{pharmacy.is_partner ? <><span>{pharmacyStock.length} төрлийн эмийн нөөцтэй</span><span>Хүргэлт {money(pharmacy.delivery_fee)}</span></> : <span>Шууд захиалгагүй</span>}</div></div></div>
+            <div className={`availability-summary ${medicineTerm && !matchedStock.length ? 'unavailable' : ''}`}>{!pharmacy.is_partner ? 'Үнэ, нөөц баталгаажаагүй' : medicineTerm ? (matchedStock.length ? `Хайсан эм ${matchedStock.length} сонголтоор байна` : 'Хайсан эм одоогоор байхгүй') : 'Баталгаажсан жишиг нөөц, үнэ'}</div>
+            <div className="nearby-stock-list">{!pharmacy.is_partner ? <div className="stock-empty">Энэ салбар системийн хамтрагч биш тул зөвхөн байршил, ажиллах цагийг харуулна.</div> : shownStock.length ? shownStock.map(item => {const medicine = medicines.find(record => record.id === item.medicine_id); return <div className="nearby-stock-row" key={item.id}><div><b>{medicine?.name}</b><small>{medicine?.category} · Үлдэгдэл {item.stock} савлагаа</small></div><strong>{money(item.price)}</strong></div>;}) : <div className="stock-empty">Энэ хайлтад тохирох эмийн нөөц алга.</div>}</div>
+            <div className="pharmacy-card-actions">{pharmacy.is_partner && <button className="outline" onClick={() => {setPage('catalog'); setQ(nearbyMedicineQuery);}}>Эмийн каталогоос харах</button>}<a className="map-link" href={`https://www.openstreetmap.org/?mlat=${pharmacy.lat}&mlon=${pharmacy.lng}#map=16/${pharmacy.lat}/${pharmacy.lng}`} target="_blank" rel="noreferrer">Газрын зураг</a></div>
           </article>;
         })}</div>
         {nearbyVisibleCount < nearbyPharmacies.length && <div className="load-more-wrap"><button className="load-more" onClick={() => setNearbyVisibleCount(count => count + 3)}>Бусад ойр эмийн санг харах <span>{Math.min(3, nearbyPharmacies.length - nearbyVisibleCount)}</span></button></div>}
@@ -430,9 +530,19 @@ function App() {
 
       {page === 'login' && <div className="auth panel"><div className="pin"><UserRound/></div><h1>{authMode === 'login' ? 'Нэвтрэх' : 'Бүртгүүлэх'}</h1><p>Хэрэглэгч бүр өөрийн эрхээр нэвтэрнэ.</p><form onSubmit={submitAuth}>{authMode === 'register' && <label>Нэр<input required minLength="2" value={authForm.name} onChange={e => setAuthForm({...authForm, name: e.target.value})}/></label>}<label>Имэйл<input required type="email" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})}/></label><label>Нууц үг<input required type="password" minLength="8" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})}/></label><button disabled={busy} className="primary" type="submit">{authMode === 'login' ? 'Нэвтрэх' : 'Бүртгүүлэх'}</button></form><button className="link" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>{authMode === 'login' ? 'Шинэ хэрэглэгч үү? Бүртгүүлэх' : 'Бүртгэлтэй юу? Нэвтрэх'}</button></div>}
 
-      {page === 'cart' && <><div className="heading"><div><h1>Миний сагс</h1><p>Өөр өөр эмийн сангаас сонгосон эмүүд тус тусдаа захиалга, хүргэлт болно.</p></div></div>{cart.length ? <div className="twocol"><div className="panel">{cart.map((x, i) => <div className="cartline" key={i}><div className="medicine-photo tiny"><img src={medicineImages[x.name]} alt=""/></div><div className="grow"><b>{x.name}</b><small>{x.pharmacy_name}</small>{(x.prescription_required || x.doctor_recommended) && <><span className={`rx inline-rx ${x.doctor_recommended ? 'recommendation' : ''}`}>{x.doctor_recommended ? 'Эмчийн зөвлөмж' : 'Цахим жор'}</span><small>Шаардлагатай: {x.required_units} {x.unit_label} · {x.quantity} савлагаа</small></>}<strong>{money(x.price * x.quantity)}</strong></div>{x.locked_quantity ? <div className="fixed-qty"><span>{x.quantity} савлагаа</span><button onClick={() => removeCartItem(x)} title="Сагснаас хасах">×</button></div> : <div className="quantity"><button onClick={() => changeQty(x, -1)}><Minus size={14}/></button>{x.quantity}<button onClick={() => changeQty(x, 1)}><Plus size={14}/></button></div>}</div>)}</div><div className="panel checkout"><h2>Захиалгын мэдээлэл</h2><div className="summary-line"><span>Эмийн дүн</span><b>{money(total)}</b></div><label className="radio"><input type="radio" checked={pickup} onChange={() => setPickup(true)}/> Очиж авах</label><label className="radio"><input type="radio" checked={!pickup} onChange={() => setPickup(false)}/> Хүргүүлэх</label>{!pickup && <><label>Хүргэлтийн хаяг<textarea value={address} onChange={e => setAddress(e.target.value)} placeholder="Хаяг"/></label><div className="summary-line"><span>Хүргэлт · {new Set(cart.map(x => x.pharmacy_id)).size} эмийн сан</span><b>{money(deliveryFee)}</b></div></>}<div className="total"><span>Нийт төлөх</span><b>{money(total + deliveryFee)}</b></div><div className="disclaimer">Эмийн сан бүр тусдаа захиалга үүсгэнэ. Эм зүйч баталгаажуулсны дараа төлбөр төлнө. Хүргэлт сонговол эмийн сан бүрийн 5,000₮ хүргэлтийн төлбөр тусдаа тооцогдоно. Энэ дипломын хувилбарт төлбөр туршилтаар баталгаажна.</div><button className="primary" disabled={busy} onClick={checkout}>Эмийн санд хүсэлт илгээх</button></div></div> : <div className="empty panel"><ShoppingCart size={38}/><h3>Таны сагс хоосон байна</h3><button className="primary" onClick={() => setPage('catalog')}>Эм хайх</button></div>}</>}
+      {page === 'cart' && <>
+        <div className="heading"><div><h1>Миний сагс</h1><p>Эмийн үнэ дээр салбар тус бүрийн хүргэлтийг нэмж, нийт төлбөрөөр харьцуулна.</p></div></div>
+        {cart.length ? <>
+          <section className="panel basket-advisor">
+            <div className="basket-advisor-head"><div><span className="eyebrow">УХААЛАГ ХАРЬЦУУЛАЛТ</span><h2>Бүх эмийг нэг дороос авах хувилбар</h2><p>Үнэ + зай + хүргэлт + нөөц + одоо ажиллаж байгаа эсэхийг хамтатган санал болгов.</p></div><ComparisonTabs value={cartSort} onChange={setCartSort}/></div>
+            <div className="current-choice"><div><span>Одоогийн сонголт</span><b>{selectedPharmacyIds.length} эмийн сан</b></div><div><span>Эмийн дүн</span><b>{money(total)}</b></div><div><span>{pickup ? 'Очиж авах' : 'Хүргэлт'}</span><b>{money(deliveryFee)}</b></div><div className="choice-total"><span>Нийт</span><b>{money(total + deliveryFee)}</b></div></div>
+            {cartRecommendations.length ? <div className="recommendation-list">{cartRecommendations.slice(0, 3).map((candidate, index) => <article className={index === 0 ? 'basket-candidate best' : 'basket-candidate'} key={candidate.pharmacy.id}><div><div className="candidate-title"><b>{candidate.pharmacy.name}</b>{index === 0 && <span>{cartSort === 'recommended' ? 'Санал болгож байна' : 'Эхний сонголт'}</span>}</div><small>{displayDistance(candidate.distance)} · {candidate.isOpen ? 'Одоо нээлттэй' : 'Одоо хаалттай'} · Бүх {new Set(cart.map(item => item.medicine_id)).size} төрлийн эм байна</small></div><div className="candidate-price"><small>Эм {money(candidate.subtotal)} + {pickup ? '0 ₮' : `хүргэлт ${money(candidate.delivery)}`}</small><strong>{money(candidate.total)}</strong></div><button className="outline" onClick={() => useBasketRecommendation(candidate)}>Энэ эмийн санг сонгох</button></article>)}</div> : <div className="no-combination">Сагсны бүх эмийг хангалттай нөөцөөр нэг дор бүрдүүлэх хамтрагч эмийн сан одоогоор алга. Одоогийн салгасан сонголтоор захиалж болно.</div>}
+          </section>
+          <div className="twocol"><div className="panel">{cart.map((x, i) => <div className="cartline" key={i}><div className="medicine-photo tiny"><img src={medicineImages[x.name]} alt=""/></div><div className="grow"><b>{x.name}</b><small>{x.pharmacy_name}</small>{(x.prescription_required || x.doctor_recommended) && <><span className={`rx inline-rx ${x.doctor_recommended ? 'recommendation' : ''}`}>{x.doctor_recommended ? 'Эмчийн зөвлөмж' : 'Цахим жор'}</span><small>Шаардлагатай: {x.required_units} {x.unit_label} · {x.quantity} савлагаа</small></>}<strong>{money(x.price * x.quantity)}</strong></div>{x.locked_quantity ? <div className="fixed-qty"><span>{x.quantity} савлагаа</span><button onClick={() => removeCartItem(x)} title="Сагснаас хасах">×</button></div> : <div className="quantity"><button onClick={() => changeQty(x, -1)}><Minus size={14}/></button>{x.quantity}<button onClick={() => changeQty(x, 1)}><Plus size={14}/></button></div>}</div>)}</div><div className="panel checkout"><h2>Захиалгын мэдээлэл</h2><div className="summary-line"><span>Эмийн дүн</span><b>{money(total)}</b></div><label className="radio"><input type="radio" checked={pickup} onChange={() => setPickup(true)}/> Очиж авах</label><label className="radio"><input type="radio" checked={!pickup} onChange={() => setPickup(false)}/> Хүргүүлэх</label>{!pickup && <><label>Хүргэлтийн хаяг<textarea value={address} onChange={e => setAddress(e.target.value)} placeholder="Хаяг"/></label><div className="summary-line"><span>Хүргэлт · {selectedPharmacyIds.length} эмийн сан</span><b>{money(deliveryFee)}</b></div></>}<div className="total"><span>Нийт төлөх</span><b>{money(total + deliveryFee)}</b></div><div className="disclaimer">Эмийн сан бүр тусдаа захиалга үүсгэнэ. Хүргэлт сонговол сонгосон салбар бүрийн хүргэлтийн төлбөр тусдаа нэмэгдэнэ. Эм зүйч баталгаажуулсны дараа туршилтын төлбөр төлнө.</div><button className="primary" disabled={busy} onClick={checkout}>Эмийн санд хүсэлт илгээх</button></div></div>
+        </> : <div className="empty panel"><ShoppingCart size={38}/><h3>Таны сагс хоосон байна</h3><button className="primary" onClick={() => setPage('catalog')}>Эм хайх</button></div>}
+      </>}
 
-      {page === 'prescriptions' && user?.role === 'customer' && <><div className="heading"><div><h1>Миний цахим жор</h1><p>Жор дээр дарж эмийн сан, үнэ, үлдэгдлээс сонгон хүсэлт илгээнэ.</p></div><button className="outline" onClick={loadMyPrescriptions}>Шинэчлэх</button></div>{myPrescriptions.length ? myPrescriptions.map(p => <PrescriptionCard key={p.id} prescription={p} inventory={inventory} onChoose={choosePrescriptionOffer}/>) : <div className="empty panel"><FileText size={38}/><h3>Цахим жор ирээгүй байна</h3><p>Эмч таны бүртгэлтэй имэйл рүү жор илгээнэ.</p></div>}</>}
+      {page === 'prescriptions' && user?.role === 'customer' && <><div className="heading"><div><h1>Миний цахим жор</h1><p>Жор дээр дарж эмийн сан, нийт үнэ, зай, үлдэгдлээс сонгон хүсэлт илгээнэ.</p></div><button className="outline" onClick={loadMyPrescriptions}>Шинэчлэх</button></div>{myPrescriptions.length ? myPrescriptions.map(p => <PrescriptionCard key={p.id} prescription={p} inventory={inventory} pharmacies={pharmacies} selectedLocation={selectedLocation} onChoose={choosePrescriptionOffer}/>) : <div className="empty panel"><FileText size={38}/><h3>Цахим жор ирээгүй байна</h3><p>Эмч таны бүртгэлтэй имэйл рүү жор илгээнэ.</p></div>}</>}
 
       {page === 'orders' && user?.role === 'customer' && <><div className="heading"><div><h1>Миний захиалгууд</h1><p>Баталгаажсан захиалгын төлбөрийг эхэлж төлөөд, дараа нь эмээ авна.</p></div><button className="outline" onClick={loadOrders}>Шинэчлэх</button></div>{orders.length ? orders.map(o => <div key={o.id}><OrderCard order={o}/>{o.status === 'approved' && <div className="actions"><button className="primary" disabled={busy} onClick={() => pay(o.id)}><CreditCard size={17}/> Туршилтын төлбөр төлөх · {money(o.total)}</button></div>}</div>) : <div className="empty panel">Одоогоор захиалга байхгүй.</div>}</>}
 
@@ -444,6 +554,10 @@ function App() {
     </main>
     <footer>© 2026 Онлайн эмийн сангийн захиалгын веб систем</footer>
   </>;
+}
+
+function ComparisonTabs({value, onChange}) {
+  return <div className="comparison-tabs">{comparisonOptions.map(([key, label]) => <button type="button" key={key} className={value === key ? 'active' : ''} onClick={() => onChange(key)}>{label}</button>)}</div>;
 }
 
 function PrescriptionItemEditor({item, index, medicines, removable, onChange, onRemove}) {
@@ -460,11 +574,16 @@ function PrescriptionItemEditor({item, index, medicines, removable, onChange, on
   return <div className="prescription-item-editor"><div className="item-editor-head"><b>Эм {index + 1}</b>{medicine && <span className={medicine.prescription_required ? 'medicine-type rx-type' : 'medicine-type recommendation-type'}>{medicine.prescription_required ? 'Жороор олгох' : 'Эмчийн зөвлөмж'}</span>}{removable && <button type="button" className="remove-medicine" onClick={onRemove}>Хасах</button>}</div><div className="medicine-picker"><label>Эм сонгох<div className="search-select-input"><Search size={17}/><input value={medicineSearch} onFocus={() => setMedicinePickerOpen(true)} onChange={e => {setMedicineSearch(e.target.value); setMedicinePickerOpen(true); if (medicine && e.target.value !== medicine.name) onChange({medicine_id: ''});}} placeholder="Эмийн нэр эсвэл төрлөөр хайх"/></div></label>{medicinePickerOpen && <div className="medicine-results">{filteredMedicines.length ? filteredMedicines.map(m => <button type="button" key={m.id} onClick={() => {onChange({medicine_id: String(m.id)}); setMedicineSearch(m.name); setMedicinePickerOpen(false);}}><img src={medicineImages[m.name]} alt=""/><span><b>{m.name}</b><small>{m.category} · {m.prescription_required ? 'жортой' : 'жоргүй'} · {m.units_per_pack} {m.unit_label}/савлагаа</small></span></button>) : <div className="picker-empty">Эм олдсонгүй</div>}</div>}</div><div className="dose-grid"><label>Нэг удаад<input required type="number" min="1" max="20" value={item.units_per_dose} onChange={e => onChange({units_per_dose: e.target.value})}/><small>{medicine?.unit_label || 'ширхэг'}</small></label><label>Өдөрт<input required type="number" min="1" max="12" value={item.times_per_day} onChange={e => onChange({times_per_day: e.target.value})}/><small>удаа</small></label><label>Хугацаа<input required type="number" min="1" max="90" value={item.duration_days} onChange={e => onChange({duration_days: e.target.value})}/><small>хоног</small></label></div>{medicine && <div className="calculation"><b>{item.units_per_dose} × {item.times_per_day} × {item.duration_days} = {requiredUnits} {medicine.unit_label}</b><span>1 савлагаа = {medicine.units_per_pack} {medicine.unit_label} → олгох: <strong>{requiredPacks} савлагаа</strong></span></div>}<label>Хэрэглэх заавар<textarea value={item.instructions} onChange={e => onChange({instructions: e.target.value})} placeholder="Ж: Хоолны дараа ууна"/></label></div>;
 }
 
-function PrescriptionCard({prescription: p, showPatient = false, inventory = [], onChoose}) {
+function PrescriptionCard({prescription: p, showPatient = false, inventory = [], pharmacies = [], selectedLocation, onChoose}) {
   const [openItem, setOpenItem] = useState(null);
   return <div className="panel prescription-card"><div className="orderhead"><div><h3>Цахим жор #{p.id}</h3><small>{new Date(p.created_at + 'Z').toLocaleString('mn-MN')} · Эмч: {p.doctor_name}</small>{showPatient && <small className="block">Өвчтөн: {p.patient_name} · {p.patient_email}</small>}</div><span className="valid-until">Хүчинтэй: {p.valid_until}</span></div>{p.items.map(item => {
-    const offers = inventory.filter(i => i.medicine_id === item.medicine_id && i.stock >= item.required_packs && i.expiry >= new Date().toISOString().slice(0, 10));
-    return <div className="rx-item-wrap" key={item.id}><div className="rx-item"><div><b>{item.medicine_name}</b><small>{item.dosage} · Нийт <strong>{item.required_units} {item.unit_label}</strong></small><small>1 савлагаа = {item.units_per_pack} {item.unit_label} · Олгох хэмжээ: <strong>{item.required_packs} савлагаа</strong></small>{item.instructions && <p>{item.instructions}</p>}</div><div className="rx-item-actions"><span className={`rx-status ${item.status}`}>{prescriptionStatus(item.status)}</span>{onChoose && ['active','recommended'].includes(item.status) && <button className="outline" onClick={() => setOpenItem(openItem === item.id ? null : item.id)}>Эмийн сан сонгох</button>}</div></div>{openItem === item.id && <div className="rx-offers"><h4>Үнэ, үлдэгдлээс сонгоно уу</h4>{offers.length ? offers.map(offer => <button className="rx-offer" key={offer.id} onClick={() => onChoose(item, offer)}><span><b>{offer.pharmacy_name}</b><small>{offer.address} · {offer.stock} савлагаа</small></span><strong>{money(offer.price * item.required_packs)}<small>{item.required_packs} савлагаа</small></strong></button>) : <p className="muted">Жорт бичсэн хэмжээгээр нөөцтэй эмийн сан алга байна.</p>}</div>}</div>;
+    const offers = inventory.filter(i => i.medicine_id === item.medicine_id && i.stock >= item.required_packs && i.expiry >= new Date().toISOString().slice(0, 10)).map(offer => {
+      const pharmacy = pharmacies.find(record => record.id === offer.pharmacy_id);
+      if (!pharmacy || !selectedLocation) return {...offer, distance: 0, isOpen: true, total: offer.price * item.required_packs, score: offer.price * item.required_packs};
+      const candidate = {...offer, distance: distanceKm(selectedLocation, pharmacy), isOpen: pharmacyOpenStatus(pharmacy).isOpen, total: offer.price * item.required_packs + pharmacy.delivery_fee};
+      return {...candidate, score: recommendationScore(candidate)};
+    }).sort((a, b) => a.score - b.score);
+    return <div className="rx-item-wrap" key={item.id}><div className="rx-item"><div><b>{item.medicine_name}</b><small>{item.dosage} · Нийт <strong>{item.required_units} {item.unit_label}</strong></small><small>1 савлагаа = {item.units_per_pack} {item.unit_label} · Олгох хэмжээ: <strong>{item.required_packs} савлагаа</strong></small>{item.instructions && <p>{item.instructions}</p>}</div><div className="rx-item-actions"><span className={`rx-status ${item.status}`}>{prescriptionStatus(item.status)}</span>{onChoose && ['active','recommended'].includes(item.status) && <button className="outline" onClick={() => setOpenItem(openItem === item.id ? null : item.id)}>Эмийн сан сонгох</button>}</div></div>{openItem === item.id && <div className="rx-offers"><h4>Нийт үнэ, зай, нөөцөөр санал болгосон дараалал</h4>{offers.length ? offers.map((offer, index) => <button className="rx-offer" key={offer.id} onClick={() => onChoose(item, offer)}><span><b>{offer.pharmacy_name}{index === 0 ? ' · Санал' : ''}</b><small>{offer.address} · {displayDistance(offer.distance)} · {offer.isOpen ? 'нээлттэй' : 'хаалттай'} · {offer.stock} савлагаа</small></span><strong>{money(offer.price * item.required_packs)}<small>Хүргэлттэй {money(offer.total)}</small></strong></button>) : <p className="muted">Жорт бичсэн хэмжээгээр нөөцтэй эмийн сан алга байна.</p>}</div>}</div>;
   })}{p.note && <p className="note">Эмчийн тэмдэглэл: {p.note}</p>}</div>;
 }
 
