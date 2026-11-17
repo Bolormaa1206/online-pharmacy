@@ -153,15 +153,23 @@ class PharmacyWorkflowTests(unittest.TestCase):
                     patient_email='customer@test.mn',
                     valid_until='2099-01-01',
                     note='Test prescription',
-                    items=[main.PrescriptionMedicineInput(medicine_id=self.medicine_rx_id, units_per_dose=1, times_per_day=2, duration_days=3, instructions='Хоолны дараа')],
+                    items=[
+                        main.PrescriptionMedicineInput(medicine_id=self.medicine_rx_id, units_per_dose=1, times_per_day=2, duration_days=3, instructions='Хоолны дараа'),
+                        main.PrescriptionMedicineInput(medicine_id=self.medicine_b_id, units_per_dose=1, times_per_day=1, duration_days=5, instructions='Шаардлагатай үед'),
+                    ],
                 ),
                 doctor,
                 session,
             )
-            self.assertEqual('active', prescription['items'][0]['status'])
-            self.assertEqual(6, prescription['items'][0]['required_units'])
-            self.assertEqual(1, prescription['items'][0]['required_packs'])
-            prescription_item_id = prescription['items'][0]['id']
+            prescription_rx = next(item for item in prescription['items'] if item['medicine_id'] == self.medicine_rx_id)
+            recommendation = next(item for item in prescription['items'] if item['medicine_id'] == self.medicine_b_id)
+            self.assertEqual('active', prescription_rx['status'])
+            self.assertEqual(6, prescription_rx['required_units'])
+            self.assertEqual(1, prescription_rx['required_packs'])
+            self.assertTrue(prescription_rx['prescription_required'])
+            self.assertEqual('recommended', recommendation['status'])
+            self.assertFalse(recommendation['prescription_required'])
+            prescription_item_id = prescription_rx['id']
 
         with self.Session() as session:
             customer = session.get(main.User, self.customer_id)
@@ -171,7 +179,8 @@ class PharmacyWorkflowTests(unittest.TestCase):
                 session,
             )[0]
             mine = main.my_prescriptions(customer, session)
-            self.assertEqual('reserved', mine[0]['items'][0]['status'])
+            mine_rx = next(item for item in mine[0]['items'] if item['medicine_id'] == self.medicine_rx_id)
+            self.assertEqual('reserved', mine_rx['status'])
 
         with self.Session() as session:
             staff = session.get(main.User, self.staff_a_id)
@@ -180,7 +189,8 @@ class PharmacyWorkflowTests(unittest.TestCase):
         with self.Session() as session:
             customer = session.get(main.User, self.customer_id)
             mine = main.my_prescriptions(customer, session)
-            self.assertEqual('reserved', mine[0]['items'][0]['status'])
+            mine_rx = next(item for item in mine[0]['items'] if item['medicine_id'] == self.medicine_rx_id)
+            self.assertEqual('reserved', mine_rx['status'])
             paid = main.pay_order(order['id'], customer, session)
             self.assertEqual('paid', paid['status'])
 
@@ -193,7 +203,10 @@ class PharmacyWorkflowTests(unittest.TestCase):
         with self.Session() as session:
             customer = session.get(main.User, self.customer_id)
             mine = main.my_prescriptions(customer, session)
-            self.assertEqual('used', mine[0]['items'][0]['status'])
+            mine_rx = next(item for item in mine[0]['items'] if item['medicine_id'] == self.medicine_rx_id)
+            recommendation = next(item for item in mine[0]['items'] if item['medicine_id'] == self.medicine_b_id)
+            self.assertEqual('used', mine_rx['status'])
+            self.assertEqual('recommended', recommendation['status'])
             with self.assertRaises(HTTPException):
                 main.checkout(
                     main.Checkout(items=[main.CartItem(pharmacy_id=self.pharmacy_a_id, medicine_id=self.medicine_rx_id, quantity=1)]),

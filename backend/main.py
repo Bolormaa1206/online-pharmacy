@@ -246,11 +246,17 @@ def prescription_view(prescription, session):
     for item in items:
         medicine=session.get(Medicine,item.medicine_id)
         usage=session.scalar(select(PrescriptionUsage).where(PrescriptionUsage.prescription_item_id==item.id))
-        status=usage.status if usage else ('expired' if prescription.valid_until<today else 'active')
+        if usage:
+            status=usage.status
+        elif prescription.valid_until<today:
+            status='expired'
+        else:
+            status='active' if medicine.prescription_required else 'recommended'
         item_views.append({
             'id':item.id,
             'medicine_id':item.medicine_id,
             'medicine_name':medicine.name,
+            'prescription_required':medicine.prescription_required,
             'dosage':item.dosage,
             'required_units':item.required_units,
             'required_packs':item.quantity,
@@ -463,7 +469,6 @@ def create_prescription(data:PrescriptionCreate,user:User=Depends(doctor),sessio
     if len({item.medicine_id for item in data.items})!=len(data.items):raise HTTPException(400,'Нэг эмийг жорд давхар оруулахгүй')
     medicines_by_id={m.id:m for m in session.scalars(select(Medicine).where(Medicine.id.in_([item.medicine_id for item in data.items]))).all()}
     if len(medicines_by_id)!=len(data.items):raise HTTPException(404,'Эм олдсонгүй')
-    if any(not medicines_by_id[item.medicine_id].prescription_required for item in data.items):raise HTTPException(400,'Зөвхөн жороор олгох эм сонгоно уу')
     prescription=Prescription(doctor_id=user.id,patient_id=patient.id,note=data.note.strip(),valid_until=data.valid_until)
     session.add(prescription);session.flush()
     for item in data.items:
