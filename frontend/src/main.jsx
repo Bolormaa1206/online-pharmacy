@@ -3,10 +3,11 @@ import {createRoot} from 'react-dom/client';
 import {
   Search, ShoppingCart, MapPin, UserRound, ClipboardList, ShieldCheck,
   Plus, Minus, CheckCircle2, XCircle, HeartPulse, Stethoscope,
-  LayoutDashboard, FileText, UsersRound, CreditCard, Truck,
+  LayoutDashboard, FileText, UsersRound, CreditCard, Truck, Clock, LocateFixed,
 } from 'lucide-react';
 import './style.css';
 import './medicine-images.css';
+import './location.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const defaultValidUntil = () => new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
@@ -51,6 +52,36 @@ const medicineImages = {
   'Метформин 500 мг': '/medicines/metformin.jpg',
   'Аспирин 100 мг': '/medicines/aspirin.jpg',
 };
+const locationOptions = [
+  {name: 'Сүхбаатарын талбай', address: 'Сүхбаатар дүүрэг, 1-р хороо', lat: 47.9187, lng: 106.9176},
+  {name: 'Улсын их дэлгүүр', address: 'Чингэлтэй дүүрэг, 3-р хороо', lat: 47.9163, lng: 106.9053},
+  {name: '13-р хороолол', address: 'Баянзүрх дүүрэг, 4-р хороо', lat: 47.9136, lng: 106.9450},
+  {name: '3, 4-р хороолол', address: 'Баянгол дүүрэг, 13-р хороо', lat: 47.9100, lng: 106.8757},
+  {name: 'Зайсан', address: 'Хан-Уул дүүрэг, 11-р хороо', lat: 47.8807, lng: 106.9124},
+  {name: 'Яармаг', address: 'Хан-Уул дүүрэг, 4-р хороо', lat: 47.8799, lng: 106.8375},
+  {name: 'Драгон төв', address: 'Сонгинохайрхан дүүрэг, 29-р хороо', lat: 47.9119, lng: 106.8215},
+  {name: 'Ботаник', address: 'Баянзүрх дүүрэг, 12-р хороо', lat: 47.9109, lng: 106.9900},
+];
+const distanceKm = (from, to) => {
+  const radians = value => value * Math.PI / 180;
+  const earthRadius = 6371;
+  const dLat = radians(to.lat - from.lat);
+  const dLng = radians(to.lng - from.lng);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(radians(from.lat)) * Math.cos(radians(to.lat)) * Math.sin(dLng / 2) ** 2;
+  return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+const displayDistance = distance => distance < 1 ? `${Math.round(distance * 1000)} м` : `${distance.toFixed(1)} км`;
+const pharmacyOpenStatus = pharmacy => {
+  const [openHour, openMinute] = pharmacy.open_time.split(':').map(Number);
+  const [closeHour, closeMinute] = pharmacy.close_time.split(':').map(Number);
+  const open = openHour * 60 + openMinute;
+  const close = closeHour * 60 + closeMinute;
+  const now = new Date();
+  const current = now.getHours() * 60 + now.getMinutes();
+  const isOpen = close > open ? current >= open && current < close : current >= open || current < close;
+  const alwaysOpen = pharmacy.open_time === '00:00' && pharmacy.close_time === '23:59';
+  return {isOpen: alwaysOpen || isOpen, hours: alwaysOpen ? '24 цаг' : `${pharmacy.open_time}–${pharmacy.close_time}`};
+};
 const roleName = role => ({customer: 'Хэрэглэгч', doctor: 'Эмч', staff: 'Эм зүйч', admin: 'Админ'}[role] || role);
 const prescriptionStatus = status => ({active: 'Хүчинтэй', recommended: 'Эмчийн зөвлөмж', reserved: 'Эмийн санд хүсэлт илгээсэн', used: 'Эм олгосон', expired: 'Хугацаа дууссан'}[status] || status);
 const orderStatus = status => ({pending: 'Эм зүйч шалгаж байна', approved: 'Баталгаажсан · төлбөр хүлээж байна', paid: 'Төлбөр төлсөн', preparing: 'Эмийг бэлтгэж байна', ready: 'Очиж авахад бэлэн', out_for_delivery: 'Хүргэлтэд гарсан', completed: 'Хүлээлгэн өгсөн', rejected: 'Татгалзсан'}[status] || status);
@@ -62,6 +93,12 @@ function App() {
   const [pharmacies, setPharmacies] = useState([]);
   const [q, setQ] = useState('');
   const [visibleCount, setVisibleCount] = useState(6);
+  const [locationSearch, setLocationSearch] = useState(locationOptions[0].name);
+  const [selectedLocation, setSelectedLocation] = useState(locationOptions[0]);
+  const [locationPickerOpen, setLocationPickerOpen] = useState(false);
+  const [nearbyMedicineQuery, setNearbyMedicineQuery] = useState('');
+  const [nearbyVisibleCount, setNearbyVisibleCount] = useState(3);
+  const [locating, setLocating] = useState(false);
   const [cart, setCart] = useState([]);
   const [cartNotice, setCartNotice] = useState('');
   const [token, setToken] = useState(localStorage.getItem('pharmacy_token'));
@@ -296,14 +333,33 @@ function App() {
     } catch (e) { message(e.message, 'error'); }
   }
 
+  function useCurrentLocation() {
+    if (!navigator.geolocation) { message('Энэ төхөөрөмж байршил тогтоох боломжгүй байна', 'error'); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(position => {
+      const location = {name: 'Миний одоогийн байршил', address: 'Төхөөрөмжөөс тогтоосон байршил', lat: position.coords.latitude, lng: position.coords.longitude};
+      setSelectedLocation(location);
+      setLocationSearch(location.name);
+      setLocationPickerOpen(false);
+      setNearbyVisibleCount(3);
+      setLocating(false);
+      message('Таны байршилд хамгийн ойр эмийн сангуудыг эрэмбэллээ');
+    }, () => {
+      setLocating(false);
+      message('Байршил авах зөвшөөрөл олгогдоогүй эсвэл байршил тогтоож чадсангүй', 'error');
+    }, {enableHighAccuracy: true, timeout: 10000, maximumAge: 300000});
+  }
+
   const filtered = useMemo(() => medicines.filter(m => (m.name + ' ' + m.category).toLowerCase().includes(q.toLowerCase())), [medicines, q]);
+  const locationMatches = locationOptions.filter(location => `${location.name} ${location.address}`.toLowerCase().includes(locationSearch.trim().toLowerCase()));
+  const nearbyPharmacies = useMemo(() => pharmacies.map(pharmacy => ({...pharmacy, distance: distanceKm(selectedLocation, pharmacy)})).sort((a, b) => a.distance - b.distance), [pharmacies, selectedLocation]);
   const visibleMedicines = filtered.slice(0, visibleCount);
   const total = cart.reduce((sum, x) => sum + x.price * x.quantity, 0);
   const deliveryFee = pickup ? 0 : new Set(cart.map(x => x.pharmacy_id)).size * 5000;
   const count = cart.reduce((sum, x) => sum + x.quantity, 0);
   const nav = [
     ['catalog', 'Эм хайх', Search],
-    ['pharmacies', 'Эмийн сан', MapPin],
+    ['pharmacies', 'Байршил', MapPin],
     ...(!user || user.role === 'customer' ? [['cart', `Сагс (${count})`, ShoppingCart]] : []),
     ...(user?.role === 'customer' ? [['prescriptions', 'Миний цахим жор', FileText], ['orders', 'Миний захиалга', ClipboardList]] : []),
     ...(user?.role === 'doctor' ? [['doctor', 'Эмчийн хэсэг', Stethoscope]] : []),
@@ -315,7 +371,11 @@ function App() {
     <header><div className="navwrap">
       <button className="brand" onClick={() => setPage('catalog')}><span className="brand-icon"><HeartPulse size={22}/></span><span>Эмийн сан <small>Онлайн захиалгын систем</small></span></button>
       <nav>{nav.map(([key, label, Icon]) => <button key={key} className={page === key ? 'selected' : ''} onClick={() => {
-        if (key === 'cart' && !user) setPage('login'); else setPage(key);
+        if (key === 'cart' && !user) setPage('login');
+        else {
+          if (key === 'pharmacies' && q.trim()) setNearbyMedicineQuery(q);
+          setPage(key);
+        }
       }}><Icon size={17}/><span>{label}</span></button>)}</nav>
       <button className="account" onClick={() => user ? logout() : setPage('login')}><UserRound size={17}/>{user ? `${user.name} · Гарах` : 'Нэвтрэх'}</button>
     </div></header>
@@ -337,7 +397,36 @@ function App() {
         {visibleCount < filtered.length && <div className="load-more-wrap"><button className="load-more" onClick={() => setVisibleCount(count => count + 6)}>Илүү ихийг харах <span>{Math.min(6, filtered.length - visibleCount)}</span></button></div>}
       </>}
 
-      {page === 'pharmacies' && <><div className="heading"><div><h1>Эмийн сангууд</h1><p>Салбаруудын хаяг болон байршлын мэдээлэл</p></div></div><div className="pharmacygrid">{pharmacies.map(p => <div className="panel" key={p.id}><div className="pin"><MapPin/></div><h3>{p.name}</h3><p>{p.address}</p><div className="mapframe"><iframe loading="lazy" title={p.name} src={`https://www.openstreetmap.org/export/embed.html?bbox=${p.lng - .008}%2C${p.lat - .005}%2C${p.lng + .008}%2C${p.lat + .005}&layer=mapnik&marker=${p.lat}%2C${p.lng}`}/></div><button className="outline" onClick={() => {setPage('catalog'); setQ('');}}>Эмүүдийг харах</button></div>)}</div></>}
+      {page === 'pharmacies' && <>
+        <div className="heading"><div><h1>Танд ойр эмийн сан</h1><p>Байршлаас тань ойр эмийн сан, ажиллах цаг, эмийн нөөцийг харьцуулна.</p></div></div>
+        <section className="panel location-panel">
+          <div className="location-panel-head"><div className="pin"><MapPin/></div><div><h2>Байршлаа сонгох</h2><p>Жишиг байршлаас сонгох эсвэл төхөөрөмжийн байршлаа ашиглана уу.</p></div></div>
+          <div className="location-controls">
+            <div className="location-picker"><label>Таны байршил<div className="location-input"><MapPin size={17}/><input value={locationSearch} onFocus={() => setLocationPickerOpen(true)} onChange={event => {setLocationSearch(event.target.value); setLocationPickerOpen(true);}} placeholder="Байршлын нэрээр хайх"/></div></label>{locationPickerOpen && <div className="location-results">{locationMatches.length ? locationMatches.map(location => <button type="button" key={location.name} onClick={() => {setSelectedLocation(location); setLocationSearch(location.name); setLocationPickerOpen(false); setNearbyVisibleCount(3);}}><b>{location.name}</b><small>{location.address}</small></button>) : <div className="picker-empty">Тохирох жишиг байршил олдсонгүй</div>}</div>}</div>
+            <button type="button" className="locate-button" disabled={locating} onClick={useCurrentLocation}><LocateFixed size={18}/>{locating ? 'Байршил тогтоож байна…' : 'Миний байршлыг ашиглах'}</button>
+            <label className="nearby-medicine-search">Эм хайх<div className="location-input"><Search size={17}/><input value={nearbyMedicineQuery} onChange={event => {setNearbyMedicineQuery(event.target.value); setNearbyVisibleCount(3);}} placeholder="Эмийн нэр эсвэл төрлөөр хайх"/></div></label>
+          </div>
+          <div className="location-summary"><span><MapPin size={15}/>{selectedLocation.name}</span><small>Туршилтын байршил, цаг, үнэ болон нөөцийн мэдээлэл</small></div>
+        </section>
+        <div className="nearby-heading"><div><h2>Хамгийн ойрын эмийн сангууд</h2><p>Зайгаар эрэмбэлсэн · эхний {Math.min(nearbyVisibleCount, nearbyPharmacies.length)} салбар</p></div>{nearbyMedicineQuery.trim() && <span>“{nearbyMedicineQuery.trim()}” хайлтын үр дүн</span>}</div>
+        <div className="nearby-pharmacy-list">{nearbyPharmacies.slice(0, nearbyVisibleCount).map((pharmacy, index) => {
+          const openStatus = pharmacyOpenStatus(pharmacy);
+          const pharmacyStock = inventory.filter(item => item.pharmacy_id === pharmacy.id && item.stock > 0 && item.expiry >= new Date().toISOString().slice(0, 10));
+          const medicineTerm = nearbyMedicineQuery.trim().toLowerCase();
+          const matchedStock = pharmacyStock.filter(item => {
+            const medicine = medicines.find(record => record.id === item.medicine_id);
+            return !medicineTerm || `${medicine?.name || ''} ${medicine?.category || ''}`.toLowerCase().includes(medicineTerm);
+          });
+          const shownStock = matchedStock.slice(0, medicineTerm ? 5 : 3);
+          return <article className="panel nearby-pharmacy" key={pharmacy.id}>
+            <div className="nearby-pharmacy-main"><div className="rank-pin"><span>{index + 1}</span><MapPin size={20}/></div><div className="nearby-pharmacy-info"><div className="pharmacy-title-line"><h3>{pharmacy.name}</h3><span className="distance-badge">{displayDistance(pharmacy.distance)}</span></div><p>{pharmacy.address}</p><div className="pharmacy-meta"><span className={openStatus.isOpen ? 'open-now' : 'closed-now'}>{openStatus.isOpen ? 'Одоо нээлттэй' : 'Одоо хаалттай'}</span><span><Clock size={15}/>{openStatus.hours}</span><span>{pharmacyStock.length} төрлийн эмийн нөөцтэй</span></div></div></div>
+            <div className={`availability-summary ${medicineTerm && !matchedStock.length ? 'unavailable' : ''}`}>{medicineTerm ? (matchedStock.length ? `Хайсан эм ${matchedStock.length} сонголтоор байна` : 'Хайсан эм одоогоор байхгүй') : 'Жишиг нөөц, үнэ'}</div>
+            <div className="nearby-stock-list">{shownStock.length ? shownStock.map(item => {const medicine = medicines.find(record => record.id === item.medicine_id); return <div className="nearby-stock-row" key={item.id}><div><b>{medicine?.name}</b><small>{medicine?.category} · Үлдэгдэл {item.stock} савлагаа</small></div><strong>{money(item.price)}</strong></div>;}) : <div className="stock-empty">Энэ хайлтад тохирох эмийн нөөц алга.</div>}</div>
+            <div className="pharmacy-card-actions"><button className="outline" onClick={() => {setPage('catalog'); setQ(nearbyMedicineQuery);}}>Эмийн каталогоос харах</button><a className="map-link" href={`https://www.openstreetmap.org/?mlat=${pharmacy.lat}&mlon=${pharmacy.lng}#map=16/${pharmacy.lat}/${pharmacy.lng}`} target="_blank" rel="noreferrer">Газрын зураг</a></div>
+          </article>;
+        })}</div>
+        {nearbyVisibleCount < nearbyPharmacies.length && <div className="load-more-wrap"><button className="load-more" onClick={() => setNearbyVisibleCount(count => count + 3)}>Бусад ойр эмийн санг харах <span>{Math.min(3, nearbyPharmacies.length - nearbyVisibleCount)}</span></button></div>}
+      </>}
 
       {page === 'login' && <div className="auth panel"><div className="pin"><UserRound/></div><h1>{authMode === 'login' ? 'Нэвтрэх' : 'Бүртгүүлэх'}</h1><p>Хэрэглэгч бүр өөрийн эрхээр нэвтэрнэ.</p><form onSubmit={submitAuth}>{authMode === 'register' && <label>Нэр<input required minLength="2" value={authForm.name} onChange={e => setAuthForm({...authForm, name: e.target.value})}/></label>}<label>Имэйл<input required type="email" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})}/></label><label>Нууц үг<input required type="password" minLength="8" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})}/></label><button disabled={busy} className="primary" type="submit">{authMode === 'login' ? 'Нэвтрэх' : 'Бүртгүүлэх'}</button></form><button className="link" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>{authMode === 'login' ? 'Шинэ хэрэглэгч үү? Бүртгүүлэх' : 'Бүртгэлтэй юу? Нэвтрэх'}</button></div>}
 

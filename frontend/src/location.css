@@ -1,0 +1,397 @@
+.location-panel {
+  margin-bottom: 26px;
+  background: linear-gradient(135deg, #f3fbf7, #fff);
+}
+
+.location-panel-head,
+.location-summary,
+.nearby-heading,
+.nearby-pharmacy-main,
+.pharmacy-title-line,
+.pharmacy-meta,
+.pharmacy-card-actions {
+  display: flex;
+  align-items: center;
+}
+
+.location-panel-head {
+  gap: 13px;
+}
+
+.location-panel-head h2,
+.nearby-heading h2,
+.nearby-pharmacy h3 {
+  margin: 0;
+}
+
+.location-panel-head p,
+.nearby-heading p {
+  margin: 5px 0 0;
+}
+
+.location-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.1fr) auto minmax(220px, 1fr);
+  align-items: end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.location-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.location-picker {
+  position: relative;
+}
+
+.location-input {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid #d5e5dd;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.location-input:focus-within {
+  border-color: #0b896b;
+  box-shadow: 0 0 0 3px #0b896b14;
+}
+
+.location-input svg {
+  flex-shrink: 0;
+  color: #0b896b;
+}
+
+.location-input input {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
+.location-results {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid #d8e5de;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 14px 35px #163d3030;
+}
+
+.location-results button {
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+  text-align: left;
+}
+
+.location-results button:hover {
+  background: #edf8f3;
+}
+
+.location-results b,
+.location-results small {
+  display: block;
+}
+
+.location-results small {
+  margin-top: 4px;
+  color: #64748b;
+}
+
+.locate-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 0 15px;
+  border: 1px solid #b9dace;
+  border-radius: 10px;
+  background: #e9f7f1;
+  color: #087960;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.locate-button:disabled {
+  opacity: .6;
+}
+
+.location-summary {
+  justify-content: space-between;
+  gap: 15px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #dfece6;
+}
+
+.location-summary span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #0b8067;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.location-summary small {
+  color: #84958e;
+  text-align: right;
+}
+
+.nearby-heading {
+  justify-content: space-between;
+  gap: 15px;
+  margin: 30px 0 16px;
+}
+
+.nearby-heading > span {
+  padding: 7px 11px;
+  border-radius: 20px;
+  background: #e8f6f1;
+  color: #087b60;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.nearby-pharmacy-list {
+  display: grid;
+  gap: 14px;
+}
+
+.nearby-pharmacy {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.1fr) minmax(260px, .9fr);
+  gap: 18px 24px;
+}
+
+.nearby-pharmacy-main {
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.rank-pin {
+  position: relative;
+  display: grid;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 14px;
+  background: #e9f8f0;
+  color: #0b8a6d;
+}
+
+.rank-pin span {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #0b896b;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.nearby-pharmacy-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.pharmacy-title-line {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pharmacy-title-line h3 {
+  font-size: 17px;
+}
+
+.distance-badge {
+  flex-shrink: 0;
+  padding: 6px 9px;
+  border-radius: 20px;
+  background: #e8efff;
+  color: #315aa8;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.nearby-pharmacy-info > p {
+  margin: 7px 0 10px;
+}
+
+.pharmacy-meta {
+  flex-wrap: wrap;
+  gap: 7px 12px;
+}
+
+.pharmacy-meta span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.pharmacy-meta .open-now,
+.pharmacy-meta .closed-now {
+  padding: 5px 8px;
+  border-radius: 20px;
+  font-weight: 800;
+}
+
+.pharmacy-meta .open-now {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.pharmacy-meta .closed-now {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.availability-summary {
+  grid-column: 2;
+  align-self: start;
+  width: max-content;
+  max-width: 100%;
+  padding: 6px 9px;
+  border-radius: 20px;
+  background: #e8f6f1;
+  color: #087b60;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.availability-summary.unavailable {
+  background: #fff1da;
+  color: #996000;
+}
+
+.nearby-stock-list {
+  grid-column: 2;
+  grid-row: 2 / span 2;
+  padding-left: 20px;
+  border-left: 1px solid #e5ece9;
+}
+
+.nearby-stock-list .availability-summary {
+  margin-bottom: 6px;
+}
+
+.nearby-stock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid #edf1ef;
+}
+
+.nearby-stock-row:last-child {
+  border-bottom: 0;
+}
+
+.nearby-stock-row b,
+.nearby-stock-row small {
+  display: block;
+}
+
+.nearby-stock-row b {
+  font-size: 12px;
+}
+
+.nearby-stock-row small {
+  margin-top: 5px;
+  color: #84958e;
+  font-size: 10px;
+}
+
+.nearby-stock-row strong {
+  flex-shrink: 0;
+  color: #0b8067;
+  font-size: 12px;
+}
+
+.stock-empty {
+  padding: 22px 10px;
+  color: #64748b;
+  text-align: center;
+  font-size: 12px;
+}
+
+.pharmacy-card-actions {
+  gap: 9px;
+  grid-column: 1;
+}
+
+.map-link {
+  padding: 9px 12px;
+  color: #315aa8;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+@media (max-width: 900px) {
+  .location-controls,
+  .nearby-pharmacy {
+    grid-template-columns: 1fr;
+  }
+
+  .nearby-stock-list,
+  .availability-summary,
+  .pharmacy-card-actions {
+    grid-column: 1;
+  }
+
+  .nearby-stock-list {
+    grid-row: auto;
+    padding: 14px 0 0;
+    border-top: 1px solid #e5ece9;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 650px) {
+  .location-summary,
+  .nearby-heading,
+  .pharmacy-title-line {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .location-summary small {
+    text-align: left;
+  }
+
+  .nearby-pharmacy {
+    padding: 18px;
+  }
+}
