@@ -18,12 +18,13 @@ class PharmacyWorkflowTests(unittest.TestCase):
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
 
         with self.Session() as session:
-            pharmacy_a = main.Pharmacy(name='A', address='A address', lat=47.9, lng=106.9)
-            pharmacy_b = main.Pharmacy(name='B', address='B address', lat=47.8, lng=106.8)
+            pharmacy_a = main.Pharmacy(name='A', address='A address', lat=47.9, lng=106.9, delivery_fee=4500)
+            pharmacy_b = main.Pharmacy(name='B', address='B address', lat=47.8, lng=106.8, delivery_fee=6500)
+            directory_only = main.Pharmacy(name='Directory', address='Directory address', lat=47.7, lng=106.7, is_partner=False, delivery_fee=0)
             medicine_a = main.Medicine(name='Medicine A', category='Test')
             medicine_b = main.Medicine(name='Medicine B', category='Test')
             medicine_rx = main.Medicine(name='Prescription Medicine', category='Test', prescription_required=True)
-            session.add_all([pharmacy_a, pharmacy_b, medicine_a, medicine_b, medicine_rx])
+            session.add_all([pharmacy_a, pharmacy_b, directory_only, medicine_a, medicine_b, medicine_rx])
             session.flush()
             session.add_all([
                 main.Inventory(pharmacy_id=pharmacy_a.id, medicine_id=medicine_a.id, price=1000, stock=3, expiry='2099-01-01'),
@@ -40,6 +41,7 @@ class PharmacyWorkflowTests(unittest.TestCase):
             session.commit()
             self.pharmacy_a_id = pharmacy_a.id
             self.pharmacy_b_id = pharmacy_b.id
+            self.directory_only_id = directory_only.id
             self.medicine_a_id = medicine_a.id
             self.medicine_b_id = medicine_b.id
             self.medicine_rx_id = medicine_rx.id
@@ -70,9 +72,9 @@ class PharmacyWorkflowTests(unittest.TestCase):
             )
             order_a = next(order for order in created if order['pharmacy_id'] == self.pharmacy_a_id)
             order_b = next(order for order in created if order['pharmacy_id'] == self.pharmacy_b_id)
-            self.assertEqual(main.DELIVERY_FEE, order_a['delivery_fee'])
-            self.assertEqual(main.DELIVERY_FEE, order_b['delivery_fee'])
-            self.assertEqual(2000 + main.DELIVERY_FEE, order_a['total'])
+            self.assertEqual(4500, order_a['delivery_fee'])
+            self.assertEqual(6500, order_b['delivery_fee'])
+            self.assertEqual(6500, order_a['total'])
 
         with self.Session() as session:
             staff_a = session.get(main.User, self.staff_a_id)
@@ -220,7 +222,32 @@ class PharmacyWorkflowTests(unittest.TestCase):
             summary = main.admin_summary(admin, session)
             self.assertEqual(5, summary['counts']['users'])
             self.assertEqual(1, summary['counts']['customers'])
-            self.assertEqual(2, summary['counts']['pharmacies'])
+            self.assertEqual(3, summary['counts']['pharmacies'])
+
+    def test_directory_only_pharmacy_cannot_receive_orders(self):
+        with self.Session() as session:
+            session.add(main.Inventory(
+                pharmacy_id=self.directory_only_id,
+                medicine_id=self.medicine_a_id,
+                price=500,
+                stock=20,
+                expiry='2099-01-01',
+            ))
+            session.commit()
+            customer = session.get(main.User, self.customer_id)
+            with self.assertRaises(HTTPException) as blocked:
+                main.checkout(
+                    main.Checkout(items=[main.CartItem(
+                        pharmacy_id=self.directory_only_id,
+                        medicine_id=self.medicine_a_id,
+                        quantity=1,
+                    )]),
+                    customer,
+                    session,
+                )
+            self.assertEqual(400, blocked.exception.status_code)
+            public_stock = main.inventory(session=session)
+            self.assertNotIn(self.directory_only_id, {item['pharmacy_id'] for item in public_stock})
 
 
 if __name__ == '__main__':

@@ -49,6 +49,8 @@ class Pharmacy(Base):
     lng: Mapped[float] = mapped_column(Float)
     open_time: Mapped[str] = mapped_column(String(5), default='08:00')
     close_time: Mapped[str] = mapped_column(String(5), default='22:00')
+    is_partner: Mapped[bool] = mapped_column(Boolean, default=True)
+    delivery_fee: Mapped[int] = mapped_column(Integer, default=5000)
 class Medicine(Base):
     __tablename__ = 'medicines'
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -67,6 +69,10 @@ class Inventory(Base):
     stock: Mapped[int] = mapped_column(Integer)
     expiry: Mapped[str] = mapped_column(String(10))
     __table_args__ = (UniqueConstraint('pharmacy_id','medicine_id'),)
+class DemoMetadata(Base):
+    __tablename__ = 'demo_metadata'
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(String(250), default='')
 class Order(Base):
     __tablename__='orders'
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -235,9 +241,34 @@ def medicine_view(m):
         'units_per_pack':m.units_per_pack,
         'unit_label':m.unit_label,
     }
+def pharmacy_view(p):
+    return {
+        'id':p.id,
+        'name':p.name,
+        'address':p.address,
+        'lat':p.lat,
+        'lng':p.lng,
+        'open_time':p.open_time,
+        'close_time':p.close_time,
+        'is_partner':p.is_partner,
+        'delivery_fee':p.delivery_fee,
+    }
 def inventory_view(inv, session):
     p = session.get(Pharmacy,inv.pharmacy_id)
-    return {'id':inv.id,'pharmacy_id':p.id,'pharmacy_name':p.name,'address':p.address,'lat':p.lat,'lng':p.lng,'medicine_id':inv.medicine_id,'price':inv.price,'stock':inv.stock,'expiry':inv.expiry}
+    return {
+        'id':inv.id,
+        'pharmacy_id':p.id,
+        'pharmacy_name':p.name,
+        'address':p.address,
+        'lat':p.lat,
+        'lng':p.lng,
+        'medicine_id':inv.medicine_id,
+        'price':inv.price,
+        'stock':inv.stock,
+        'expiry':inv.expiry,
+        'is_partner':p.is_partner,
+        'delivery_fee':p.delivery_fee,
+    }
 
 def prescription_view(prescription, session):
     doctor_user=session.get(User,prescription.doctor_id)
@@ -353,14 +384,14 @@ def me(user:User=Depends(auth)):
     return {'id':user.id,'name':user.name,'email':user.email,'role':user.role,'pharmacy_id':user.pharmacy_id}
 @app.get('/api/pharmacies')
 def pharmacies(session:Session=Depends(db)):
-    return [{'id':p.id,'name':p.name,'address':p.address,'lat':p.lat,'lng':p.lng,'open_time':p.open_time,'close_time':p.close_time} for p in session.scalars(select(Pharmacy)).all()]
+    return [pharmacy_view(p) for p in session.scalars(select(Pharmacy)).all()]
 @app.get('/api/medicines')
 def medicines(q:str='',session:Session=Depends(db)):
     records=session.scalars(select(Medicine).where(Medicine.name.ilike(f'%{q}%')).order_by(Medicine.name)).all()
     return [medicine_view(m) for m in records]
 @app.get('/api/inventory')
 def inventory(medicine_id:Optional[int]=None,pharmacy_id:Optional[int]=None,session:Session=Depends(db)):
-    statement=select(Inventory)
+    statement=select(Inventory).join(Pharmacy).where(Pharmacy.is_partner.is_(True))
     if medicine_id:statement=statement.where(Inventory.medicine_id==medicine_id)
     if pharmacy_id:statement=statement.where(Inventory.pharmacy_id==pharmacy_id)
     return [inventory_view(i,session) for i in session.scalars(statement.order_by(Inventory.price)).all()]
@@ -377,6 +408,9 @@ def checkout(data:Checkout,user:User=Depends(auth),session:Session=Depends(db)):
     selected_prescriptions=set()
     today=datetime.now().date().isoformat()
     for (pharmacy_id,medicine_id,requested_prescription_item_id),quantity in grouped.items():
+        pharmacy=session.get(Pharmacy,pharmacy_id)
+        if not pharmacy:raise HTTPException(404,'Эмийн сан олдсонгүй')
+        if not pharmacy.is_partner:raise HTTPException(400,'Хамтрагч бус эмийн сангаас шууд захиалга хийх боломжгүй')
         inv=session.scalar(select(Inventory).where(Inventory.pharmacy_id==pharmacy_id,Inventory.medicine_id==medicine_id))
         med=session.get(Medicine,medicine_id)
         if not inv or not med:raise HTTPException(404,'Эмийн нөөц олдсонгүй')
@@ -408,13 +442,14 @@ def checkout(data:Checkout,user:User=Depends(auth),session:Session=Depends(db)):
         by_pharmacy.setdefault(pharmacy_id,[]).append((inv,quantity,prescription_item))
     results=[]
     for pharmacy_id,entries in by_pharmacy.items():
+        pharmacy=session.get(Pharmacy,pharmacy_id)
         order=Order(
             user_id=user.id,
             pharmacy_id=pharmacy_id,
             pickup=data.pickup,
             address=data.address.strip(),
             prescription_note=data.prescription_note.strip(),
-            delivery_fee=0 if data.pickup else DELIVERY_FEE,
+            delivery_fee=0 if data.pickup else pharmacy.delivery_fee,
         )
         session.add(order);session.flush()
         for inv,quantity,prescription_item in entries:
@@ -590,6 +625,8 @@ def migrate_schema():
         'pharmacies':{
             'open_time':"open_time VARCHAR(5) NOT NULL DEFAULT '08:00'",
             'close_time':"close_time VARCHAR(5) NOT NULL DEFAULT '22:00'",
+            'is_partner':'is_partner BOOLEAN NOT NULL DEFAULT TRUE',
+            'delivery_fee':f'delivery_fee INTEGER NOT NULL DEFAULT {DELIVERY_FEE}',
         },
         'prescription_items':{
             'required_units':'required_units INTEGER NOT NULL DEFAULT 1',
@@ -624,17 +661,17 @@ def seed():
     convert_legacy_prescriptions=migrate_schema()
     with SessionLocal() as s:
         pharmacy_specs=[
-            ('Энэрэл Фарм эмийн сан','Сүхбаатар дүүрэг, 1-р хороо, Сүхбаатарын талбайн зүүн тал',47.9184,106.9177,'08:00','22:00'),
-            ('Түмэн Эрүүл эмийн сан','Баянзүрх дүүрэг, 4-р хороо, 13-р хороолол',47.9138,106.9457,'09:00','21:00'),
-            ('Саруул Фарм эмийн сан','Чингэлтэй дүүрэг, 3-р хороо, Улсын их дэлгүүрийн хойд тал',47.9169,106.9058,'00:00','23:59'),
-            ('Ногоон Навч эмийн сан','Баянгол дүүрэг, 13-р хороо, 3, 4-р хороолол',47.9102,106.8748,'08:30','20:30'),
-            ('Амин Тус эмийн сан','Хан-Уул дүүрэг, 11-р хороо, Зайсан',47.8817,106.9128,'09:00','22:00'),
-            ('Тэгш Фарм эмийн сан','Сонгинохайрхан дүүрэг, 29-р хороо, Драгон төв',47.9119,106.8218,'08:00','20:00'),
-            ('Өргөө Фарм эмийн сан','Хан-Уул дүүрэг, 4-р хороо, Яармаг',47.8799,106.8379,'10:00','22:00'),
-            ('Итгэлт Фарм эмийн сан','Баянзүрх дүүрэг, 12-р хороо, Ботаник',47.9108,106.9902,'00:00','23:59'),
+            ('Энэрэл Фарм эмийн сан','Сүхбаатар дүүрэг, 1-р хороо, Сүхбаатарын талбайн зүүн тал',47.9184,106.9177,'08:00','22:00',True,4500),
+            ('Түмэн Эрүүл эмийн сан','Баянзүрх дүүрэг, 4-р хороо, 13-р хороолол',47.9138,106.9457,'09:00','21:00',True,5500),
+            ('Саруул Фарм эмийн сан','Чингэлтэй дүүрэг, 3-р хороо, Улсын их дэлгүүрийн хойд тал',47.9169,106.9058,'00:00','23:59',True,4000),
+            ('Ногоон Навч эмийн сан','Баянгол дүүрэг, 13-р хороо, 3, 4-р хороолол',47.9102,106.8748,'08:30','20:30',True,5000),
+            ('Амин Тус эмийн сан','Хан-Уул дүүрэг, 11-р хороо, Зайсан',47.8817,106.9128,'09:00','22:00',True,4800),
+            ('Тэгш Фарм эмийн сан','Сонгинохайрхан дүүрэг, 29-р хороо, Драгон төв',47.9119,106.8218,'08:00','20:00',True,4200),
+            ('Өргөө Фарм эмийн сан','Хан-Уул дүүрэг, 4-р хороо, Яармаг',47.8799,106.8379,'10:00','22:00',False,0),
+            ('Итгэлт Фарм эмийн сан','Баянзүрх дүүрэг, 12-р хороо, Ботаник',47.9108,106.9902,'00:00','23:59',False,0),
         ]
         ps=list(s.scalars(select(Pharmacy).order_by(Pharmacy.id)).all())
-        for index,(name,address,lat,lng,open_time,close_time) in enumerate(pharmacy_specs):
+        for index,(name,address,lat,lng,open_time,close_time,is_partner,delivery_fee) in enumerate(pharmacy_specs):
             if index < len(ps):
                 pharmacy=ps[index]
                 pharmacy.name=name
@@ -643,8 +680,10 @@ def seed():
                 pharmacy.lng=lng
                 pharmacy.open_time=open_time
                 pharmacy.close_time=close_time
+                pharmacy.is_partner=is_partner
+                pharmacy.delivery_fee=delivery_fee
             else:
-                pharmacy=Pharmacy(name=name,address=address,lat=lat,lng=lng,open_time=open_time,close_time=close_time)
+                pharmacy=Pharmacy(name=name,address=address,lat=lat,lng=lng,open_time=open_time,close_time=close_time,is_partner=is_partner,delivery_fee=delivery_fee)
                 s.add(pharmacy)
                 ps.append(pharmacy)
         s.flush()
@@ -688,6 +727,14 @@ def seed():
                 item.required_units=legacy_units
                 item.quantity=ceil(legacy_units/medicine.units_per_pack)
 
+        def balanced_demo_price(medicine_index:int, pharmacy_index:int) -> int:
+            """Rotate the cheapest branch so no pharmacy is always the lowest priced."""
+            partner_count=sum(1 for pharmacy in ps if pharmacy.is_partner)
+            base_price=1800+medicine_index*920
+            cheapest_index=(medicine_index*5+2)%partner_count
+            rank=(pharmacy_index-cheapest_index)%partner_count
+            return base_price+rank*240+((medicine_index+pharmacy_index)%3)*40
+
         for pi,pharmacy in enumerate(ps):
             for mi,medicine in enumerate(ms):
                 inventory=s.scalar(select(Inventory).where(
@@ -698,10 +745,23 @@ def seed():
                     s.add(Inventory(
                         pharmacy_id=pharmacy.id,
                         medicine_id=medicine.id,
-                        price=1800+mi*920+pi*370,
+                        price=balanced_demo_price(mi,pi),
                         stock=8+((mi*3+pi*5)%24),
                         expiry='2029-12-31',
                     ))
+
+        s.flush()
+        price_version=s.get(DemoMetadata,'balanced_prices_v1')
+        if not price_version:
+            pharmacy_indexes={pharmacy.id:index for index,pharmacy in enumerate(ps)}
+            medicine_indexes={medicine.id:index for index,medicine in enumerate(ms)}
+            for inventory in s.scalars(select(Inventory)).all():
+                if inventory.pharmacy_id in pharmacy_indexes and inventory.medicine_id in medicine_indexes:
+                    inventory.price=balanced_demo_price(
+                        medicine_indexes[inventory.medicine_id],
+                        pharmacy_indexes[inventory.pharmacy_id],
+                    )
+            s.add(DemoMetadata(key='balanced_prices_v1',value='rotating-cheapest-pharmacy'))
 
         demo_staff=[
             ('Эм зүйч А. Мөнхзул','staff@demo.mn'),
