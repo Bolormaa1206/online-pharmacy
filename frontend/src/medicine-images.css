@@ -13,20 +13,6 @@
   object-fit: cover;
 }
 
-.medicine-photo > span {
-  position: absolute;
-  right: 10px;
-  bottom: 9px;
-  background: #173d36d9;
-  color: #fff;
-  border-radius: 20px;
-  padding: 5px 9px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: .02em;
-  backdrop-filter: blur(4px);
-}
-
 .medicine-photo.tiny {
   width: 62px;
   height: 62px;
