@@ -707,7 +707,7 @@ def seed():
         demo_accounts=[
             ('Бат-Эрдэнийн Номин','customer@demo.mn','DemoCustomer123!','customer'),
             ('Дотрын эмч Б. Энхтөр','doctor@demo.mn','DemoDoctor123!','doctor'),
-            ('Админ Г. Солонго','admin@demo.mn','DemoAdmin123!','admin'),
+            ('Б.Болормаа','admin@demo.mn','DemoAdmin123!','admin'),
         ]
         for name,email,password,role in demo_accounts:
             user=s.scalar(select(User).where(User.email==email))
