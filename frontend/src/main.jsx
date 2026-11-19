@@ -483,7 +483,7 @@ function App() {
 
   return <>
     <header><div className="navwrap">
-      <button className="brand" onClick={() => setPage('catalog')}><span className="brand-icon"><HeartPulse size={22}/></span><span>Эмийн сан <small>Онлайн захиалгын систем</small></span></button>
+      <button className="brand" onClick={() => setPage('catalog')}><span className="brand-icon"><HeartPulse size={22}/></span><span>БолорМед <small>Онлайн эмийн сангийн систем</small></span></button>
       <nav>{nav.map(([key, label, Icon]) => <button key={key} className={page === key ? 'selected' : ''} onClick={() => {
         if (key === 'cart' && !user) setPage('login');
         else {
@@ -502,8 +502,8 @@ function App() {
       {cartNotice && <div className="cart-toast"><CheckCircle2 size={19}/><span>{cartNotice}</span></div>}
 
       {page === 'catalog' && <>
-        <section className="hero"><div><span className="eyebrow">ОНЛАЙН ЭМИЙН САНГИЙН СИСТЕМ</span><h1>Хэрэгтэй эмээ нэг дороос<br/><em>хайж, харьцуулж, захиалаарай.</em></h1><p>Эмийн сангуудын үнэ, үлдэгдэл, байршлыг харьцуулан захиалга үүсгэх боломжтой.</p><div className="search"><Search color="#64748b" size={20}/><input value={q} onChange={e => setQ(e.target.value)} placeholder="Эмийн нэр эсвэл төрлөөр хайх..."/></div></div><div className="hero-art"><span>✚</span><p>Та эрүүл мэнддээ<br/>анхаараарай</p></div></section>
-        <div className="heading"><div><h2>Эмийн бүтээгдэхүүнүүд</h2><p>{filtered.length} бүтээгдэхүүн · Эмийн үнэ, хүргэлт, зай, нөөц, ажиллах төлөвийг хамтатган харьцуулна</p></div><ComparisonTabs value={catalogSort} onChange={setCatalogSort}/></div>
+        <section className="hero"><div><span className="eyebrow">БОЛОРМЕД · ОНЛАЙН ЭМИЙН САНГИЙН СИСТЕМ</span><h1>Хэрэгтэй эмээ нэг дороос<br/><em>хайж, харьцуулж, захиалаарай.</em></h1><p>Эмийн сангуудын үнэ, үлдэгдэл, байршлыг харьцуулан захиалга үүсгэх боломжтой.</p><div className="search"><Search color="#64748b" size={20}/><input value={q} onChange={e => setQ(e.target.value)} placeholder="Эмийн нэр эсвэл төрлөөр хайх..."/></div></div><div className="hero-art"><span>✚</span><p>Та эрүүл мэнддээ<br/>анхаараарай</p></div></section>
+        <div className="heading"><div><h2>Эмийн бүтээгдэхүүнүүд</h2></div><ComparisonTabs value={catalogSort} onChange={setCatalogSort}/></div>
         <div className="productgrid">{visibleMedicines.map(m => {
           const rankedOffers = rankedMedicineOffers(m.id, inventory, pharmacies, selectedLocation, catalogSort);
           const recommended = rankedOffers[0];
@@ -550,7 +550,7 @@ function App() {
         <div className="heading"><div><h1>Миний сагс</h1><p>Эмийн үнэ дээр салбар тус бүрийн хүргэлтийг нэмж, нийт төлбөрөөр харьцуулна.</p></div></div>
         {cart.length ? <>
           <section className="panel basket-advisor">
-            <div className="basket-advisor-head"><div><span className="eyebrow">УХААЛАГ ХАРЬЦУУЛАЛТ</span><h2>Бүх эмийг нэг дороос авах хувилбар</h2><p>Үнэ + зай + хүргэлт + нөөц + одоо ажиллаж байгаа эсэхийг хамтатган санал болгов.</p></div><ComparisonTabs value={cartSort} onChange={setCartSort}/></div>
+            <div className="basket-advisor-head"><div><h2>Таны сонгосон эмүүд дараах эмийн сангуудад байна.</h2></div><ComparisonTabs value={cartSort} onChange={setCartSort}/></div>
             <div className="current-choice"><div><span>Одоогийн сонголт</span><b>{selectedPharmacyIds.length} эмийн сан</b></div><div><span>Эмийн дүн</span><b>{money(total)}</b></div><div><span>{pickup ? 'Очиж авах' : 'Хүргэлт'}</span><b>{money(deliveryFee)}</b></div><div className="choice-total"><span>Нийт</span><b>{money(total + deliveryFee)}</b></div></div>
             {cartRecommendations.length ? <div className="recommendation-list">{cartRecommendations.slice(0, 3).map((candidate, index) => <article className={index === 0 ? 'basket-candidate best' : 'basket-candidate'} key={candidate.pharmacy.id}><div><div className="candidate-title"><b>{candidate.pharmacy.name}</b>{index === 0 && <span>{cartSort === 'recommended' ? 'Санал болгож байна' : 'Эхний сонголт'}</span>}</div><small>{displayDistance(candidate.distance)} · {candidate.isOpen ? 'Одоо нээлттэй' : 'Одоо хаалттай'} · Бүх {new Set(cart.map(item => item.medicine_id)).size} төрлийн эм байна</small></div><div className="candidate-price"><small>Эм {money(candidate.subtotal)} + {pickup ? '0 ₮' : `хүргэлт ${money(candidate.delivery)}`}</small><strong>{money(candidate.total)}</strong></div><button className="outline" onClick={() => useBasketRecommendation(candidate)}>Энэ эмийн санг сонгох</button></article>)}</div> : <div className="no-combination">Сагсны бүх эмийг хангалттай нөөцөөр нэг дор бүрдүүлэх хамтрагч эмийн сан одоогоор алга. Одоогийн салгасан сонголтоор захиалж болно.</div>}
           </section>
@@ -568,7 +568,7 @@ function App() {
 
       {page === 'admin' && user?.role === 'admin' && <><div className="heading"><div><h1>Админы хяналтын хэсэг</h1><p>Системийн хэрэглэгч, захиалга, жор болон эмийн сангийн нэгдсэн мэдээлэл</p></div><button className="outline" onClick={loadAdmin}>Шинэчлэх</button></div>{adminSummary && <><div className="statgrid"><StatCard icon={UsersRound} label="Нийт хэрэглэгч" value={adminSummary.counts.users}/><StatCard icon={UserRound} label="Үйлчлүүлэгч" value={adminSummary.counts.customers}/><StatCard icon={ClipboardList} label="Захиалга" value={adminSummary.counts.orders}/><StatCard icon={FileText} label="Цахим жор" value={adminSummary.counts.prescriptions}/><StatCard icon={MapPin} label="Эмийн сан" value={adminSummary.counts.pharmacies}/></div><h2 className="space">Хэрэглэгчид</h2><div className="panel table-scroll"><table><thead><tr><th>ID</th><th>Нэр</th><th>Имэйл</th><th>Эрх</th><th>Эмийн сангийн ID</th></tr></thead><tbody>{adminSummary.users.map(u => <tr key={u.id}><td>#{u.id}</td><td>{u.name}</td><td>{u.email}</td><td><span className={`role role-${u.role}`}>{roleName(u.role)}</span></td><td>{u.pharmacy_id || '—'}</td></tr>)}</tbody></table></div><h2 className="space">Сүүлийн захиалгууд</h2>{adminSummary.orders.length ? adminSummary.orders.map(o => <OrderCard key={o.id} order={o}/>) : <div className="panel">Захиалга байхгүй байна.</div>}</>}</>}
     </main>
-    <footer>© 2026 Онлайн эмийн сангийн захиалгын веб систем</footer>
+    <footer>© 2026 БолорМед · Онлайн эмийн сангийн захиалгын веб систем</footer>
     {selectedMedicine && <PharmacyOfferModal medicine={selectedMedicine} inventory={inventory} pharmacies={pharmacies} selectedLocation={selectedLocation} sort={catalogSort} onSort={setCatalogSort} onClose={() => setSelectedMedicine(null)} onAdd={(offer, medicine) => {setSelectedMedicine(null); add(offer, medicine);}}/>}
   </>;
 }
